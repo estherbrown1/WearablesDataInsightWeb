@@ -1,0 +1,13 @@
+{
+  "type": "service_account",
+  "project_id": "apcomp297",
+  "private_key_id": "84a78a17c7a6d6266dc922c90ac6c661738dbddd",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvwIBADANBgkqhkiG9w0BAQEFAASCBKkwggSlAgEAAoIBAQDMRdJg62JMvxwV\nXE1/TPOYFjjV88dB74UxFK83BTL3jkXTqJTrBKbuJqms6HWBHMPgBEWyH42S/3Fu\nQK7BWNnd9UqI5kA1G2ZmetRbpqLpJ9dnW+WxBPn4/pMsT4P9WU9E6NHHFAXhvoy6\nimNf1JU13XzDC6Eu4L4nb0rSDppHeRetsF3LLG/zrYgmjltdmak4PP6NH/GPP28y\nSFlTFQi4ZxiRatD6z3ZOrFJvRDghr5u6FX8oM3DpQAOrcjdOURvBiTgpkovBn5dJ\nKN0TQKBij35uU3hTlT/l/lavDEvFyiERADDQkKJfgQWRK/YmKIqTDq/VFtq/fQel\nesR1akO/AgMBAAECggEADWxpLsVJExIGnmtlDFXaNsb/D9A9P9qlk1wbR4T9RxdV\nBLEHWDUDYz2sg22jNcuAyQUphKheJ/1xTsrMBm34TdsDUuEOnG7N2TN+e6daUp1e\nTQR/oOpazZStHImn0CDrp0jwFXeotfT3pSqC7UE4V5nTy7LFR3dYB5oLU1JyVk/t\n54VYWqBBpwjZKn+nn1t0kjNnhwfVZ/9vA49l91y5kuruLXsRumiimu6DsTMT1IFt\nwLojw64L2Wb/k3JUmFYRiTADPcnWFCzasb8syP0GLop+1s2EuUCEjVqGkRaLJ2C0\n9Xy4xdnB2LEC19bKEh1Og6yXMO2eO0wG2LXlPTWCAQKBgQD/7fdVj/pSCvUFqSM/\nyWfhc+3M6+6Tjjwwty8OoU2JBsC2iciB8ewcjfggVl5E2iNKbrarA/tRH26l1lMl\nhKYADLAaNJ4KIw0+ScR9K76pdshcyDqv16MuoKX50VCxoluqx+F5nPodE1TMYTNR\n5+TiXcBnGKPHTWbzFnSeaA40HwKBgQDMVDc3eFiKN1p/wTasCzbHHRQfuzojhbfZ\npYQyrIwAHImgdboiAhcLjUdg4DkwLHJYdTl4LKveCbAt0OL9f3vrFj38UvgUrhcX\nTCkE6Fno6xqByiMxpuiHVO8xiRmB2c9fkSTXs9V3/s59dNPpTTOcGlUWonwAr8W+\nrfgprAb8YQKBgQDwCCYDL6gcrn4jswCGYMV3JB2SJm16Itq87fHKjOqFa7nu+cb+\naQGDvntLCPYdKWIT+0aDmpZo/UvvadZNx91RCpVX3qWi6EERfGo244JMukUtD/ZK\n2boIj09bwD8oexfyUslcIChMgMb1cOyLEy0OSdOcXfWthSDbOOJjd0BrDQKBgQDF\nVsSpVxq0Crfl0PZ7fK0f6u6nosyIyDmDA79Era7c4LLu/SSSedBGAOGiJ4w0AYlB\n851YelRXMqYr6aWAzOIiby3Yh00/s89rWcv4CGvlb0L/fPk2mAvVwGrvPYkcBv+o\nPecGSJHvvXEya2XK2hvxNOFe5fi7NQfXm++kV5e7oQKBgQDCVf6SKoQnShE/vGxV\neRo2WT0KZAMJQ7EWhYliquUp6Rmyz/W1EN6c+j9na2Yg6B0t0++880LGHbpGsTB2\n3aFyQlcYOKbzgldjEzFcV7/eYhFIFFzkAydO//IWKjle+jhXQBQZ2v2zcMkHo/xk\nly9VEtP43LgSfDc3ZA3FZVUYkA==\n-----END PRIVATE KEY-----\n",
+  "client_email": "josha-service-account@apcomp297.iam.gserviceaccount.com",
+  "client_id": "111203620017506853688",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/josha-service-account%40apcomp297.iam.gserviceaccount.com",
+  "universe_domain": "googleapis.com"
+}

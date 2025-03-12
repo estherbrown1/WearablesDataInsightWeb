@@ -1,0 +1,9 @@
+pandas
+numpy
+google-cloud-storage
+google
+streamlit
+altair
+vega_datasets
+pymysql
+pwlf
