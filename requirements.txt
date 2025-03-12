@@ -7,3 +7,4 @@ altair
 vega_datasets
 pymysql
 pwlf
+scikit-learn
