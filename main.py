@@ -6,11 +6,13 @@ from data_page import data_upload
 from upload_calendar import calendar_upload_page 
 from download_data import download_user_data
 from sql_utils import get_admin_name
+from analytics import inject_google_analytics
 # from log import log_page
 # from sql_utils import get_rds_connection
 
 
 def main():
+    inject_google_analytics()
     st.sidebar.title('Main Menu')
     page = st.sidebar.radio('Go to', [
         'Signup', 
