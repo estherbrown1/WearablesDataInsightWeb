@@ -5,7 +5,132 @@ from dataclasses import dataclass, field
 from vega_datasets import data
 from sklearn.linear_model import LinearRegression
 import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.patches import Circle, PathPatch
+from matplotlib.path import Path
+import io
+import base64
 
+    
+def create_moon_sleep_indicator(sleep_score, size=100, effect_color=None):
+    """
+    Creates a horizontally filled circle (moon shape) based on a sleep_score from 0..100.
+    
+    Labeling uses Garmin thresholds for Sleep Quality:
+        - >= 90 => "Excellent"
+        - >= 80 => "Good"
+        - >= 60 => "Fair"
+        - < 60  => "Poor"
+    
+    Color logic:
+      - If effect_color is 'blues', fill with #6EB9F7
+      - If effect_color is 'reds', fill with #EF476F
+      - Otherwise, color is based on the same Garmin thresholds:
+          >= 90 => #6EB9F7 (blue)
+          >= 80 => #64C2A6 (teal/green)
+          >= 60 => #FFD166 (yellow)
+          <  60 => #EF476F (red)
+    
+    If sleep_score is None or invalid, draws a fully gray circle with "No Sleep Data".
+    
+    Args:
+        sleep_score (float): Sleep score in [0..100], or None/NaN
+        size (int): (Optional) figure size in pixels (not heavily used here)
+        effect_color (str): If provided, overrides color scheme with 'blues' or 'reds'.
+    
+    Returns:
+        str: Base64-encoded PNG suitable for embedding (e.g., in Altair).
+    """
+
+    # Create figure
+    fig, ax = plt.subplots(figsize=(2.5, 3), dpi=150)
+    fig.patch.set_alpha(0)  # transparent background
+    ax.set_xlim(-1.2, 1.2)
+    ax.set_ylim(-1.5, 1.5)
+    ax.set_aspect('equal')
+    ax.axis('off')
+
+    moon_radius = 0.7
+
+    # Helper function: Garmin threshold -> label
+    def garmin_label(score):
+        if score >= 90:
+            return "Excellent Sleep"
+        elif score >= 80:
+            return "Good Sleep"
+        elif score >= 60:
+            return "Fair Sleep"
+        else:
+            return "Poor Sleep"
+
+    # Helper function: Garmin threshold -> color
+    def garmin_color(score):
+        if score >= 90:
+            return '#6EB9F7'  # excellent (blue)
+        elif score >= 80:
+            return '#64C2A6'  # good (teal/green)
+        elif score >= 60:
+            return '#FFD166'  # fair (yellow)
+        else:
+            return '#EF476F'  # poor (red)
+
+    # Check if invalid sleep_score
+    if (sleep_score is None or pd.isna(sleep_score)
+        or not isinstance(sleep_score, (int, float))):
+        # Gray filled circle
+        circle = Circle((0, 0), moon_radius, facecolor='lightgray',
+                        edgecolor='gray', linewidth=1)
+        ax.add_patch(circle)
+        ax.text(0, -1.3, "No Sleep Data", ha='center', va='center',
+                fontsize=14, color='black', fontweight='bold')
+    else:
+        # Clamp to [0..100]
+        sleep_score = max(0, min(sleep_score, 100))
+        fill_level = sleep_score / 100.0  # fraction for partial fill
+
+        # Determine the label from Garmin thresholds
+        label = garmin_label(sleep_score)
+
+        # Decide color: if effect_color is forced, override. Otherwise, Garmin color.
+        if effect_color == 'blues':
+            fill_color = '#6EB9F7'
+        elif effect_color == 'reds':
+            fill_color = '#EF476F'
+        else:
+            fill_color = garmin_color(sleep_score)
+
+        # Outline circle
+        outline = Circle((0, 0), moon_radius, facecolor='none',
+                         edgecolor='gray', linewidth=1)
+        ax.add_patch(outline)
+
+        # Horizontal fill from left to right
+        rect_left   = -moon_radius
+        rect_bottom = -moon_radius
+        rect_height = 2 * moon_radius
+        fill_width  = 2 * moon_radius * fill_level
+
+        fill_rect = plt.Rectangle((rect_left, rect_bottom),
+                                  fill_width, rect_height,
+                                  facecolor=fill_color, edgecolor=None)
+        ax.add_patch(fill_rect)
+
+        # Clip rectangle to circle
+        circle_path = Path.circle((0, 0), moon_radius)
+        fill_rect.set_clip_path(PathPatch(circle_path, transform=ax.transData))
+
+        # Label
+        ax.text(0, -1.3, label, ha='center', va='center',
+                fontsize=14, color='black', fontweight='bold')
+
+    # Convert figure to base64
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', bbox_inches='tight', transparent=True, dpi=150)
+    plt.close(fig)
+    buf.seek(0)
+
+    img_str = base64.b64encode(buf.read()).decode('utf-8')
+    return f"data:image/png;base64,{img_str}"
 @dataclass
 class ComparisonPlotsManager:
     """
@@ -108,6 +233,7 @@ class ComparisonPlotsManager:
         for instance in self.differences_df["instance"].unique():
             self.instances_df.loc[self.instances_df["instance"] == instance, "effect"] = self.differences_df[self.differences_df["instance"] == instance]["effect"].iloc[0]
 
+
     def plot_trajectories(self) -> None:
         """
         Method to plot the trajectory of instances as lines.
@@ -194,7 +320,6 @@ class ComparisonPlotsManager:
         custom_tick_vals = [i for i in range(0,self.mins_before,10)]
         custom_tick_vals.extend([self.mins_before+i for i in range(0, int(self.max_duration), 10)])
         custom_tick_vals.extend([self.mins_before+int(self.max_duration)+i for i in range(0,self.mins_after+11,10)])
-        print(custom_tick_vals)
         x_axis = alt.X("mins:Q", 
             axis=alt.Axis(
                 title="Minutes",
@@ -275,53 +400,68 @@ class ComparisonPlotsManager:
             )
         return lines_before_after, lines_during
     
-    def create_trajectory_sleep_info(self, sleep_df:pd.DataFrame, color_condition:alt.condition, inner_radius=6, outer_radius=12, x_padding:float=1.05) -> tuple[alt.Chart, alt.Chart, alt.Chart]:
+    def create_trajectory_sleep_info(self, sleep_df:pd.DataFrame, color_condition:alt.condition, inner_radius=6, outer_radius=12, x_padding:float=1.065) -> tuple[alt.Chart, alt.Chart, alt.Chart]:
         """
         Creates and returns Altair chart layers for sleep information
         """
         shared_x_max = 0 if self.split_comparison_plots else self.instances_df["mins"].max()
-        outline = alt.Chart(sleep_df).mark_arc(innerRadius=inner_radius, outerRadius=outer_radius, strokeWidth=2, fillOpacity=0).encode(
-            theta = alt.Theta("dummy_outline:Q", stack=False, scale=alt.Scale(domain=[0,100])),
-            x = alt.X("modified_x:Q"),
-            y = alt.Y(f"{self.var}:Q"),
-            color=color_condition,
-            stroke=color_condition,
+        
+        # Generate moon images for each sleep score
+        sleep_df = sleep_df.copy()  # Make a copy to avoid modifying the original
+        
+        # Determine the effect color scheme
+        effect = sleep_df['effect'].iloc[0] if not sleep_df.empty and 'effect' in sleep_df.columns else None
+        effect_color = 'blues' if effect == 'Positive' else 'reds' if effect == 'Negative' else None
+        
+        # Ensure sleep_label is properly set and replace null sleep scores with "No Sleep Data" text
+        for idx, row in sleep_df.iterrows():
+            score = row.get('sleep_score')
+            if score is None or pd.isna(score):
+                sleep_df.at[idx, 'sleep_label'] = "No Sleep Data"
+                sleep_df.at[idx, 'sleep_score_display'] = "No Sleep Data"
+            elif score >= 80:
+                sleep_df.at[idx, 'sleep_label'] = "Good Sleep"
+                sleep_df.at[idx, 'sleep_score_display'] = f"{int(score)}"
+            elif score >= 60:
+                sleep_df.at[idx, 'sleep_label'] = "Fair Sleep"
+                sleep_df.at[idx, 'sleep_score_display'] = f"{int(score)}"
+            else:
+                sleep_df.at[idx, 'sleep_label'] = "Poor Sleep"
+                sleep_df.at[idx, 'sleep_score_display'] = f"{int(score)}"
+        
+        # Add moon images with the effect color
+        sleep_df['moon_image'] = sleep_df.apply(
+            lambda row: create_moon_sleep_indicator(row.get('sleep_score'), effect_color=effect_color), 
+            axis=1
+        )
+        
+        # Create a chart with the moon images
+        moon_chart = alt.Chart(sleep_df).mark_image(
+            width=80,
+            height=100
+        ).encode(
+            x=alt.X("modified_x:Q"),
+            y=alt.Y(f"{self.var}:Q"),
+            url='moon_image:N',
             tooltip=[
                 alt.Tooltip("instance:N", title="Instance"),
                 alt.Tooltip("sleep_label:N", title="Sleep Quality"),
-                alt.Tooltip("sleep_score:Q", title="Sleep Score"),
+                alt.Tooltip("sleep_score_display:N", title="Sleep Score")
             ]
         ).transform_calculate(
-            "modified_x",f"max(datum.mins * {x_padding}, {shared_x_max} * {x_padding})"
+            "modified_x", f"max(datum.mins * {x_padding}, {shared_x_max} * {x_padding})"
         )
-        arcs = alt.Chart(sleep_df).mark_arc(innerRadius=inner_radius, outerRadius=outer_radius).encode(
-            theta=alt.Theta("sleep_score:Q", stack=False, scale=alt.Scale(domain=[0,100])),
-            x=alt.X("modified_x:Q"),
-            y=alt.Y(f"{self.var}:Q"),
-            color=color_condition,
-            tooltip=[
-                alt.Tooltip("instance:N", title="Instance"),
-                alt.Tooltip("sleep_label:N", title="Sleep Quality"),
-                alt.Tooltip("sleep_score:Q", title="Sleep Score"),
-            ]
-        ).transform_calculate(
-            "modified_x",f"max(datum.mins * {x_padding}, {shared_x_max} * {x_padding})"
-        )
-        sleep_labels = alt.Chart(sleep_df).mark_text(yOffset=-inner_radius-outer_radius).encode(
-            text=alt.Text("sleep_label:N"),
-            x=alt.X("modified_x:Q"),
-            y=alt.Y(f"{self.var}:Q"),
-            color=color_condition,
-            tooltip=alt.value(None),
-        ).transform_calculate(
-            "modified_x",f"max(datum.mins * {x_padding}, {shared_x_max} * {x_padding})"
-        )
-        return outline, arcs, sleep_labels
+        
+        # Create empty charts to maintain the expected return structure
+        empty_chart1 = alt.Chart(pd.DataFrame()).mark_point().encode()
+        empty_chart2 = alt.Chart(pd.DataFrame()).mark_point().encode()
+        
+        return moon_chart, empty_chart1, empty_chart2
     
     def create_trajectory_regression(self, instance_df:pd.DataFrame, 
-                                     instances_to_process:list[str], 
-                                     x_axis:alt.X, y_scale:alt.Scale, color_scheme:str,
-                                     regression_method:str="simple") -> list[alt.Chart]:
+                                    instances_to_process:list[str], 
+                                    x_axis:alt.X, y_scale:alt.Scale, color_scheme:str,
+                                    regression_method:str="simple") -> list[alt.Chart]:
         """
         Method that creates regression trend lines using simple linear regression.
         """
@@ -361,18 +501,51 @@ class ComparisonPlotsManager:
                             "instance": instance
                         })
                         
-                        # Use the same dash pattern for all periods
-                        instance_regression = alt.Chart(regression_df).mark_line(
-                            strokeDash=[2, 2],  # Consistent dash pattern for all periods
-                            size=2
+                        # Create a highlighter effect with dashed lines
+                        
+                        # Wide, very transparent background (no dashes)
+                        wide_background = alt.Chart(regression_df).mark_line(
+                            strokeWidth=7,  # Very wide for highlighter effect
+                            opacity=0.2      # Very transparent
                         ).encode(
                             x=x_axis,
                             y=alt.Y(f"{self.var}_fit:Q", scale=y_scale),
                             color=alt.Color("instance:N", scale=alt.Scale(scheme=color_scheme), legend=None),
-                            tooltip=alt.value(None),
+                            tooltip=alt.value(None)
                         )
                         
-                        regression_layers.append(instance_regression)
+                        # Medium background with wide dashes
+                        medium_background = alt.Chart(regression_df).mark_line(
+                            strokeWidth=5,    # Medium width
+                            opacity=0.3,      # Medium transparency
+                            strokeDash=[4, 4] # Wide dashes
+                        ).encode(
+                            x=x_axis,
+                            y=alt.Y(f"{self.var}_fit:Q", scale=y_scale),
+                            color=alt.Color("instance:N", scale=alt.Scale(scheme=color_scheme), legend=None),
+                            tooltip=alt.value(None)
+                        )
+                        
+                        # Main dashed line on top
+                        main_line = alt.Chart(regression_df).mark_line(
+                            strokeWidth=2.3,    # Thicker main line
+                            opacity=0.7,      # Slightly transparent
+                            strokeDash=[4, 4] # Standard dashes
+                        ).encode(
+                            x=x_axis,
+                            y=alt.Y(f"{self.var}_fit:Q", scale=y_scale),
+                            color=alt.Color("instance:N", scale=alt.Scale(scheme=color_scheme), legend=None),
+                            tooltip=[
+                                alt.Tooltip("instance:N", title="Instance"),
+                                alt.Tooltip("period:N", title="Period"),
+                                alt.Tooltip(f"{self.var}_fit:Q", title=self.var_label, format=".1f")
+                            ]
+                        )
+                        
+                        # Add all three layers to create a translucent highlighter effect over dashed lines
+                        regression_layers.append(wide_background)
+                        regression_layers.append(medium_background)
+                        regression_layers.append(main_line)
                         
                     except Exception as e:
                         print(f"Linear regression failed: {e}")
@@ -395,7 +568,8 @@ class ComparisonPlotsManager:
             ),
             tooltip=[
                 alt.Tooltip("event_name", title="Event"),
-                alt.Tooltip("isoDate:T", title="Time", format=r"%c")
+                alt.Tooltip("event_start:T", title="Start Time", format=r"%c"),
+                alt.Tooltip("event_end:T", title="End Time", format=r"%c")
             ]
         ).transform_calculate(
             event_legend="'Event'" 
@@ -415,7 +589,8 @@ class ComparisonPlotsManager:
             ),
             tooltip=[
                 alt.Tooltip("calendar_name", title="Calendar Event"),
-                alt.Tooltip("isoDate:T", title="Time", format=r"%c")
+                alt.Tooltip("calendar_start:T", title="Start Time", format=r"%c"),
+                alt.Tooltip("calendar_end:T", title="End Time", format=r"%c")
             ]
         ).transform_calculate(
             event_legend="'Calendar Event'" 

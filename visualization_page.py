@@ -283,7 +283,7 @@ def diff_plot_util(selected_var_dfname):
             st.info("This may be due to insufficient data for the selected intervention and variable.")
 
 def visualization_page(annotation = False, diff_plot = False):
-    st.title("Visualization Page")
+    st.title("Data Visualization")
 
     if 'submit_selection' not in st.session_state:
         st.session_state['submit_selection'] = False

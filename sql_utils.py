@@ -437,8 +437,11 @@ def get_instances(user:str, intervention:str, mins_before:int, mins_after:int, v
                     if event_df.shape[0] > 0:
                         event_df["unix_timestamp_cleaned"] = event_df.apply(get_time, axis=1)
                         event_df = event_df.set_index("unix_timestamp_cleaned")
-                        event_df["event_name"] = event_df["events"]
-                        var_df = var_df.merge(event_df[["event_name"]], left_index=True, right_index=True, how="outer")
+                        event_df = event_df.rename({"events":"event_name", 
+                                                    "start_time":"event_start", 
+                                                    "end_time":"event_end"}, axis=1)
+                        var_df = var_df.merge(event_df[["event_name","event_start","event_end"]], 
+                                              left_index=True, right_index=True, how="outer")
                 except Exception:
                     # Continue without events data
                     pass
@@ -460,10 +463,14 @@ def get_instances(user:str, intervention:str, mins_before:int, mins_after:int, v
                     calendar_df = pd.read_sql_query(calendar_query, conn)
                     if calendar_df.shape[0] > 0:
                         calendar_df["start_time"] = pd.to_datetime(calendar_df["start_time"]).astype('int64') // 10**6  # Convert to ms
+                        calendar_df["end_time"] = pd.to_datetime(calendar_df["end_time"]).astype('int64') // 10**6  # Convert to ms
                         calendar_df["unix_timestamp_cleaned"] = calendar_df.apply(get_time, axis=1)
                         calendar_df = calendar_df.set_index("unix_timestamp_cleaned")
-                        calendar_df["calendar_name"] = calendar_df["summary"]
-                        var_df = var_df.merge(calendar_df[["calendar_name"]], left_index=True, right_index=True, how="outer")
+                        calendar_df = calendar_df.rename({"summary":"calendar_name", 
+                                                    "start_time":"calendar_start", 
+                                                    "end_time":"calendar_end"}, axis=1)
+                        var_df = var_df.merge(calendar_df[["calendar_name","calendar_start","calendar_end"]],
+                                               left_index=True, right_index=True, how="outer")
                 except Exception:
                     # Continue without calendar data
                     pass

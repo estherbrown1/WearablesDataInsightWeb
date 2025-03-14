@@ -11,16 +11,16 @@ from sql_utils import get_admin_name
 
 
 def main():
-    st.sidebar.title('Navigation')
+    st.sidebar.title('Main Menu')
     page = st.sidebar.radio('Go to', [
         'Signup', 
-        'Login', 
-        'Visualization', 
-        "Annotations", 
-        "Compare plot", 
-        "Upload data",
-        "Calendar Upload",  
-        "Download data"
+        'Login',    
+        'Enter Annotations',         # Changed from 'Visualization'
+        'Show Annotations',      # Changed from 'Annotations'
+        'Compare Interventions',     # Changed from 'Compare plot'
+        'Calendar Upload', 
+        'Upload Data - Admin',
+        'Download Data - Admin'          # Changed from "Download data"
     ])
 
     st.session_state.logged_in = st.session_state.get('logged_in', False)
@@ -30,33 +30,33 @@ def main():
     elif page == 'Login':
         login_successful = login_page()
         if login_successful:
-            st.session_state.page = 'Visualization'  # Redirect to visualization page
-    elif page == 'Visualization':
-        if not st.session_state.logged_in:
-            st.warning("You must log in to access this page.")
-            return
-        visualization_page(annotation=False)
-    elif page == 'Annotations':
-        if not st.session_state.logged_in:
-            st.warning("You must log in to access this page.")
-            return
-        visualization_page(annotation=True)
-    elif page == 'Compare plot':
-        if not st.session_state.logged_in:
-            st.warning("You must log in to access this page.")
-            return
-        visualization_page(diff_plot=True)
-    elif page == "Upload data":
+            st.session_state.page = 'Upload Data'  # Changed redirect to Upload Data
+    elif page == 'Upload Data - Admin':  # Changed from "Upload data"
         if not st.session_state.logged_in:
             st.warning("You must log in to access this page.")
             return
         data_upload()
-    elif page == "Calendar Upload":  
+    elif page == 'Calendar Upload':
         if not st.session_state.logged_in:
             st.warning("You must log in to access this page.")
             return
         calendar_upload_page()
-    elif page == "Download data":
+    elif page == 'Enter Annotations':  # Changed from 'Visualization'
+        if not st.session_state.logged_in:
+            st.warning("You must log in to access this page.")
+            return
+        visualization_page(annotation=False)
+    elif page == 'Show Annotations':  # Changed from 'Annotations'
+        if not st.session_state.logged_in:
+            st.warning("You must log in to access this page.")
+            return
+        visualization_page(annotation=True)
+    elif page == 'Compare Interventions':  # Changed from 'Compare plot'
+        if not st.session_state.logged_in:
+            st.warning("You must log in to access this page.")
+            return
+        visualization_page(diff_plot=True)
+    elif page == 'Download Data - Admin':  # Changed from "Download data"
         if not (st.session_state.logged_in and get_admin_name() == st.session_state.user):
             st.warning("You must log in as the admin to access this page.")
             return
