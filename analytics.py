@@ -3,10 +3,8 @@ from streamlit.components.v1 import html
 
 def inject_google_analytics():
     """
-    Inject Google Analytics tracking code (GA4) using Streamlit components.
-    This is more reliable than using st.markdown for script injection.
+    Inject Google Analytics (GA4) tracking code into the Streamlit app.
     """
-    # Google Analytics tracking code
     ga_script = """
     <!-- Google tag (gtag.js) -->
     <script async src="https://www.googletagmanager.com/gtag/js?id=G-P31FMHW9FQ"></script>
@@ -17,21 +15,16 @@ def inject_google_analytics():
 
       gtag('config', 'G-P31FMHW9FQ');
     </script>
-    
-    <!-- Empty div to avoid affecting page layout -->
-    <div style="display:none">GA Injected</div>
+    <!-- Adding a visible element ensures the iframe is properly rendered -->
+    <div style="display:none">GA Initialized</div>
     """
     
-    # Use Streamlit's html component to inject the script
-    # This creates an iframe that properly executes the script
+    # Use html component for reliable script execution
     html(ga_script, height=0)
 
 def track_page_view(page_name):
     """
-    Track a page view in Google Analytics
-    
-    Args:
-        page_name: Name of the page being viewed
+    Track a page view in Google Analytics.
     """
     track_script = f"""
     <script>
@@ -46,7 +39,9 @@ def track_page_view(page_name):
             console.log('gtag not defined yet');
         }}
     </script>
+    <!-- Adding a visible element ensures the iframe is properly rendered -->
     <div style="display:none">Page view tracked: {page_name}</div>
     """
     
+    # Use html component for reliable script execution
     html(track_script, height=0)
