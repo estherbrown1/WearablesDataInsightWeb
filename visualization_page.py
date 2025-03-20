@@ -12,23 +12,37 @@ VAR_DICT = {
     "daily_heart_rate": "beatsPerMinute",
     "respiration": "breathsPerMinute",
     "bbi": "bbi",
+    "rmssd": "rmssd",
     "step": "steps"
 }
 
 OPTIONS_TO_VAR = {
     "Stress Level" : "stress",
-    "Heart Rate" : "daily_heart_rate",
-    "Respiration Rate": "respiration",
+    "Heart Rate Variability": "rmssd",
     "Beat-to-beat Interval": "bbi",
     "Steps Taken": "step",
+    "Heart Rate" : "daily_heart_rate",
+    "Respiration Rate": "respiration",
 }
 VAR_TO_OPTIONS = {v:k for k,v in OPTIONS_TO_VAR.items()}
 
+DESC_TEXT = {
+    "Stress Level": 
+        "Garmin's **stress level** measures stress from 0-100: 0-25 (resting), 25-50 (low), 50-75 (medium), and 75-100 (high).",
+    "Heart Rate": 
+        "**Heart rate** (beats per minute) indicates how fast your heart is beating. Higher values may reflect higher stress.",
+    "Respiration Rate": 
+        "**Respiration rate** (breaths per minute) measures breathing speed. Higher values may indicate increased stress.",
+    "Beat-to-beat Interval": 
+        "The **time between heartbeats** (milliseconds). Lower values may suggest higher stress.",
+    "Heart Rate Variability": 
+        "RMSSD (root mean square of successive differences) measures **heart rate variability**, reflecting fluctuations in heartbeat intervals. Lower values may indicate higher stress.",
+    "Steps Taken": 
+        "Number of **steps taken** throughout the day."
+}
+
 def questionaire(selected, var_name = "events"):
 
-    # Define local offset to handle time input
-    local_offset = -time.timezone * 1000
-    
     with st.container():
         st.markdown("### Add New Entry")
         st.markdown("---")
@@ -56,8 +70,8 @@ def questionaire(selected, var_name = "events"):
         st.markdown("#### 2. Time Range")
         try:
             selected_times = selected["selection"]["param_1"]["isoDate"]
-            start_time = pd.to_datetime(selected_times[0] + local_offset, unit='ms')
-            end_time = pd.to_datetime(selected_times[1] + local_offset, unit='ms')
+            start_time = pd.to_datetime(selected_times[0] + LOCAL_OFFSET, unit='ms')
+            end_time = pd.to_datetime(selected_times[1] + LOCAL_OFFSET, unit='ms')
             start_time = start_time.tz_localize(None)
             end_time = end_time.tz_localize(None)
 
@@ -158,16 +172,14 @@ def add_annotations(table_name, start_date, end_date, start_hour, end_hour):
             # Process the data if we have any
             if not annotations_df.empty:
                 # Convert timestamps for events/interventions
-                local_offset = -time.timezone * 1000
-                
                 if table_name == 'calendar_events':
                     # Calendar events are already in datetime format
                     annotations_df['start_time'] = pd.to_datetime(annotations_df['start_time'])
                     annotations_df['end_time'] = pd.to_datetime(annotations_df['end_time'])
                 else:
                     # Convert timestamps for events/interventions
-                    annotations_df['start_time'] = pd.to_datetime(annotations_df['start_time'] + local_offset, unit="ms")
-                    annotations_df['end_time'] = pd.to_datetime(annotations_df['end_time'] + local_offset, unit="ms")
+                    annotations_df['start_time'] = pd.to_datetime(annotations_df['start_time'] + LOCAL_OFFSET, unit="ms")
+                    annotations_df['end_time'] = pd.to_datetime(annotations_df['end_time'] + LOCAL_OFFSET, unit="ms")
 
                 # Filter the annotations
                 filtered_df = annotations_df[
@@ -223,14 +235,17 @@ def add_annotations(table_name, start_date, end_date, start_hour, end_hour):
         conn.close()
 
 def diff_plot_util(selected_var_dfname):
-    options = fetch_past_options(st.session_state['user'], var_name = "interventions")
+    
+    instance_type = st.selectbox("Please select a category:", ["Interventions", "Events"]).lower()
+
+    options = fetch_past_options(st.session_state['user'], var_name=instance_type)
     options = [o for o in options if o is not None]
     
     if not options:
-        st.warning("No interventions found. Please add interventions before creating comparison plots.")
+        st.warning(f"No {instance_type} found. Please add {instance_type} before attempting to view comparison plots.")
         return
         
-    selected_option = st.selectbox("Please select an option:", options)
+    selected_option = st.selectbox(f"Please select an {instance_type[:-1]}:", options)
     
     # Ask the user for an integer input
     minutes_input_before = st.text_input("How many minutes before (X) should be:", "15")
@@ -256,7 +271,8 @@ def diff_plot_util(selected_var_dfname):
         try:
             result = get_instances(
                 user=st.session_state.user,
-                intervention=selected_option,
+                instance_type=instance_type,
+                instance=selected_option,
                 mins_before=X_before,
                 mins_after=X_after,
                 var=selected_var_dfname,
@@ -276,7 +292,10 @@ def diff_plot_util(selected_var_dfname):
                 
             instances_df, aggregate_df = result
             
-            ComparisonPlotsManager(instances_df, aggregate_df, selected_var_dfname, VAR_TO_OPTIONS, X_before, X_after, split_comparison_plots=st.session_state.split_comparison_plots)
+            ComparisonPlotsManager(instances_df, aggregate_df, instance_type, 
+                                   selected_var_dfname, VAR_TO_OPTIONS, 
+                                   X_before, X_after, 
+                                   split_comparison_plots=st.session_state.split_comparison_plots)
             
         except Exception as e:
             st.error(f"Error generating comparison plots: {str(e)}")
@@ -294,6 +313,9 @@ def visualization_page(annotation = False, diff_plot = False):
 
     selected_var = st.selectbox("Please select an option:", var_options)
     selected_var_dfname = OPTIONS_TO_VAR[selected_var]
+
+    # Display description text
+    st.info(DESC_TEXT[selected_var])
 
     # Fetch data
     df = fetch_data(selected_var, OPTIONS_TO_VAR, st.session_state.user)

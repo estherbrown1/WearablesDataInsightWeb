@@ -3,6 +3,13 @@ import numpy as np
 import pymysql
 import time
 
+import pymysql.cursors
+
+if time.localtime().tm_isdst and time.daylight:
+    LOCAL_OFFSET = -time.altzone * 1000  # Adjust for DST
+else:
+    LOCAL_OFFSET = -time.timezone * 1000  # Standard time offset
+
 def get_rds_connection():
     return pymysql.connect(
         host="apcomp297.chg8skogwghf.us-east-2.rds.amazonaws.com",  # Your RDS endpoint
@@ -11,6 +18,14 @@ def get_rds_connection():
         database="wearable",  # Database name on RDS
         port=3306
     )
+
+def get_df_from_query(query:str, conn:pymysql.connections.Connection) -> pd.DataFrame:
+    """Helper function that returns the results of a SQL query as a dataframe."""
+    with conn.cursor() as cursor:
+        cursor.execute(query)
+        columns = [desc[0] for desc in cursor.description]
+        df = pd.DataFrame(cursor.fetchall(), columns=columns)
+    return df
 
 def check_user_credentials(username, password=None):
     """
@@ -256,7 +271,7 @@ def fetch_data(var, var_dict, user_name):
         query = f"SELECT * FROM {table_name}"
         
         # Execute the query and load data into a pandas DataFrame
-        df = pd.read_sql_query(query, conn)
+        df = get_df_from_query(query, conn)
         return df
     
     except (pymysql.err.ProgrammingError, pymysql.err.OperationalError) as e:
@@ -343,15 +358,19 @@ def validate_var_dict(var_dict):
         print(f"ERROR validating var_dict: {e}")
         return False
 
-def get_instances(user:str, intervention:str, mins_before:int, mins_after:int, var:str, var_dict:dict) -> tuple[pd.DataFrame, pd.DataFrame]:
+# Define helper function that fetches the correct point in time to plot the event/intervention
+def get_time(row, instance_start, instance_end, start_time):
+    if row["start_time"] + LOCAL_OFFSET < instance_start:
+        return max(row["start_time"] + LOCAL_OFFSET, start_time)
+    else:
+        return max(row["start_time"] + LOCAL_OFFSET, instance_end)
+
+def get_instances(user:str, instance_type:str, instance:str, mins_before:int, mins_after:int, var:str, var_dict:dict) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Function that selects multiple instances of the same intervention, returns a dataframe of all instances.
     """
     # Convert minutes to ms
     ms_before, ms_after = mins_before * 60 * 1000, mins_after * 60 * 1000
-
-    # Local timezone offset in ms from UTC
-    local_offset = -time.timezone * 1000
 
     # Connect to the RDS database
     try:
@@ -364,43 +383,35 @@ def get_instances(user:str, intervention:str, mins_before:int, mins_after:int, v
 
     try:
         # Query the interventions table to get times for the given user and intervention
-        cursor.execute("""
+        cursor.execute(f"""
             SELECT start_time, end_time
-            FROM interventions
+            FROM {instance_type}
             WHERE name = %s
-            AND interventions = %s
-        """, (user, intervention))
-
+            AND {instance_type} = %s
+        """, (user, instance))
         time_tuples = cursor.fetchall()  # List of tuples [(start_time_1,end_time_1), ...] (in ms)
 
-        # If no results, try with the column name 'intervention'
+        # If no results, try with the column name 'intervention' / 'event'
         if not time_tuples:
-            cursor.execute("""
+            cursor.execute(f"""
                 SELECT start_time, end_time
-                FROM interventions
+                FROM {instance_type}
                 WHERE name = %s
-                AND intervention = %s
-            """, (user, intervention))
+                AND {instance_type[:-1]} = %s
+            """, (user, instance))
             time_tuples = cursor.fetchall()
 
         if not time_tuples:
             empty_df = pd.DataFrame()
-            empty_df.attrs['error_message'] = f"No data available for {intervention}. Please remember to tag the interventions you want to compare."
+            empty_df.attrs['error_message'] = f"No data available for {instance}. Please remember to tag the events/interventions you want to compare."
             return empty_df, None
 
-        # Define helper function that fetches the correct point in time to plot the event
-        def get_time(row):
-            if row["start_time"] + local_offset < instance_start:
-                return max(row["start_time"] + local_offset, start_time)
-            else:
-                return max(row["start_time"] + local_offset, instance_end)
-
         # Initialize dataframe of instances
-        instances_df = pd.DataFrame(columns=["event_name", "calendar_name"])
+        instances_df = pd.DataFrame(columns=["intervention_name", "event_name", "calendar_name"])
 
         for i, (init_instance_start, init_instance_end) in enumerate(time_tuples):
-            instance_start = init_instance_start + local_offset
-            instance_end = init_instance_end + local_offset
+            instance_start = init_instance_start + LOCAL_OFFSET
+            instance_end = init_instance_end + LOCAL_OFFSET
             start_time, end_time = instance_start - ms_before, instance_end + ms_after
 
             try:
@@ -411,7 +422,7 @@ def get_instances(user:str, intervention:str, mins_before:int, mins_after:int, v
                 """
 
                 # Create a dataframe with the selected data
-                var_df = pd.read_sql_query(var_query, conn)
+                var_df = get_df_from_query(var_query, conn)
                 
                 if var_df.empty:
                     continue
@@ -423,62 +434,90 @@ def get_instances(user:str, intervention:str, mins_before:int, mins_after:int, v
                 var_df[var] = var_df[var_dict[var]].astype("float64")
                 var_df = var_df.set_index("unix_timestamp_cleaned")
 
+                # Get interventions
+                if instance_type != "interventions":
+                    try:
+                        intervention_query = f"""
+                            SELECT start_time, end_time, interventions
+                            FROM interventions
+                            WHERE name = "{user}" 
+                            AND (start_time BETWEEN {start_time-LOCAL_OFFSET} AND {end_time-LOCAL_OFFSET}
+                            OR end_time BETWEEN {start_time-LOCAL_OFFSET} AND {end_time-LOCAL_OFFSET}
+                            OR (start_time <= {start_time-LOCAL_OFFSET} AND end_time >= {end_time-LOCAL_OFFSET}))
+                        """
+                        intervention_df = get_df_from_query(intervention_query, conn)
+                        if intervention_df.shape[0] > 0:
+                            intervention_df["unix_timestamp_cleaned"] = intervention_df.apply(get_time, axis=1, args=(instance_start, instance_end, start_time))
+                            intervention_df = intervention_df.set_index("unix_timestamp_cleaned")
+                            intervention_df = intervention_df.rename({"interventions":"intervention_name", 
+                                                                    "start_time":"intervention_start", 
+                                                                    "end_time":"intervention_end"}, axis=1)
+                            var_df = var_df.merge(intervention_df[["intervention_name","intervention_start","intervention_end"]], 
+                                                left_index=True, right_index=True, how="outer")
+                    except Exception:
+                        # Continue without intervention data
+                        pass
+
                 # Get events
-                try:
-                    event_query = f"""
-                        SELECT start_time, end_time, events
-                        FROM events
-                        WHERE name = "{user}" 
-                        AND (start_time BETWEEN {start_time-local_offset} AND {end_time-local_offset}
-                        OR end_time BETWEEN {start_time-local_offset} AND {end_time-local_offset}
-                        OR (start_time <= {start_time-local_offset} AND end_time >= {end_time-local_offset}))
-                    """
-                    event_df = pd.read_sql_query(event_query, conn)
-                    if event_df.shape[0] > 0:
-                        event_df["unix_timestamp_cleaned"] = event_df.apply(get_time, axis=1)
-                        event_df = event_df.set_index("unix_timestamp_cleaned")
-                        event_df = event_df.rename({"events":"event_name", 
-                                                    "start_time":"event_start", 
-                                                    "end_time":"event_end"}, axis=1)
-                        var_df = var_df.merge(event_df[["event_name","event_start","event_end"]], 
-                                              left_index=True, right_index=True, how="outer")
-                except Exception:
-                    # Continue without events data
-                    pass
+                if instance_type != "events":
+                    try:
+                        event_query = f"""
+                            SELECT start_time, end_time, events
+                            FROM events
+                            WHERE name = "{user}" 
+                            AND (start_time BETWEEN {start_time-LOCAL_OFFSET} AND {end_time-LOCAL_OFFSET}
+                            OR end_time BETWEEN {start_time-LOCAL_OFFSET} AND {end_time-LOCAL_OFFSET}
+                            OR (start_time <= {start_time-LOCAL_OFFSET} AND end_time >= {end_time-LOCAL_OFFSET}))
+                        """
+                        event_df = get_df_from_query(event_query, conn)
+                        if event_df.shape[0] > 0:
+                            event_df["unix_timestamp_cleaned"] = event_df.apply(get_time, axis=1, args=(instance_start, instance_end, start_time))
+                            event_df = event_df.set_index("unix_timestamp_cleaned")
+                            event_df = event_df.rename({"events":"event_name", 
+                                                        "start_time":"event_start", 
+                                                        "end_time":"event_end"}, axis=1)
+                            var_df = var_df.merge(event_df[["event_name","event_start","event_end"]], 
+                                                left_index=True, right_index=True, how="outer")
+                    except Exception:
+                        # Continue without events data
+                        pass
 
                 # Get calendar events
-                try:
-                    start_time_dt = pd.to_datetime(start_time, unit="ms").strftime("%Y-%m-%d %H:%M:%S")
-                    end_time_dt = pd.to_datetime(end_time, unit="ms").strftime("%Y-%m-%d %H:%M:%S")
-                    calendar_query = f"""
-                        SELECT 
-                            start_time,
-                            end_time,
-                            summary
-                        FROM {user}_calendar_events
-                        WHERE start_time BETWEEN '{start_time_dt}' AND '{end_time_dt}'
-                        OR end_time BETWEEN '{start_time_dt}' AND '{end_time_dt}'
-                        OR (start_time <= '{start_time_dt}' AND end_time >= '{end_time_dt}')
-                    """
-                    calendar_df = pd.read_sql_query(calendar_query, conn)
-                    if calendar_df.shape[0] > 0:
-                        calendar_df["start_time"] = pd.to_datetime(calendar_df["start_time"]).astype('int64') // 10**6  # Convert to ms
-                        calendar_df["end_time"] = pd.to_datetime(calendar_df["end_time"]).astype('int64') // 10**6  # Convert to ms
-                        calendar_df["unix_timestamp_cleaned"] = calendar_df.apply(get_time, axis=1)
-                        calendar_df = calendar_df.set_index("unix_timestamp_cleaned")
-                        calendar_df = calendar_df.rename({"summary":"calendar_name", 
-                                                    "start_time":"calendar_start", 
-                                                    "end_time":"calendar_end"}, axis=1)
-                        var_df = var_df.merge(calendar_df[["calendar_name","calendar_start","calendar_end"]],
-                                               left_index=True, right_index=True, how="outer")
-                except Exception:
-                    # Continue without calendar data
-                    pass
+                if instance_type != "calendar events":
+                    try:
+                        start_time_dt = pd.to_datetime(start_time, unit="ms").strftime("%Y-%m-%d %H:%M:%S")
+                        end_time_dt = pd.to_datetime(end_time, unit="ms").strftime("%Y-%m-%d %H:%M:%S")
+                        calendar_query = f"""
+                            SELECT 
+                                start_time,
+                                end_time,
+                                summary
+                            FROM {user}_calendar_events
+                            WHERE start_time BETWEEN '{start_time_dt}' AND '{end_time_dt}'
+                            OR end_time BETWEEN '{start_time_dt}' AND '{end_time_dt}'
+                            OR (start_time <= '{start_time_dt}' AND end_time >= '{end_time_dt}')
+                        """
+                        calendar_df = get_df_from_query(calendar_query, conn)
+                        if calendar_df.shape[0] > 0:
+                            calendar_df["start_time"] = pd.to_datetime(calendar_df["start_time"]).astype('int64') // 10**6  # Convert to ms
+                            calendar_df["end_time"] = pd.to_datetime(calendar_df["end_time"]).astype('int64') // 10**6  # Convert to ms
+                            calendar_df["unix_timestamp_cleaned"] = calendar_df.apply(get_time, axis=1, args=(instance_start, instance_end, start_time))
+                            calendar_df = calendar_df.set_index("unix_timestamp_cleaned")
+                            calendar_df = calendar_df.rename({"summary":"calendar_name", 
+                                                        "start_time":"calendar_start", 
+                                                        "end_time":"calendar_end"}, axis=1)
+                            var_df = var_df.merge(calendar_df[["calendar_name","calendar_start","calendar_end"]],
+                                                left_index=True, right_index=True, how="outer")
+                    except Exception:
+                        # Continue without calendar data
+                        pass
 
-                if "event_name" in var_df.columns:
-                    var_df = var_df.sort_index()
-                    mask = var_df["event_name"].notna()
-                    var_df.loc[mask, var] = var_df[var].interpolate(method="index")[mask]
+                # Fill in NA values if present
+                for col in ["intervention", "event", "calendar"]:
+                    if f"{col}_name" in var_df.columns:
+                        var_df = var_df.sort_index()
+                        mask = var_df[f"{col}_name"].notna()
+                        var_df.loc[mask, var] = var_df[var].interpolate(method="index")[mask]
 
                 var_df = var_df.reset_index()
 
@@ -552,7 +591,7 @@ def get_instances(user:str, intervention:str, mins_before:int, mins_after:int, v
         # If no instances with data were found, return empty DataFrame with error message
         if instances_df.empty:
             empty_df = pd.DataFrame()
-            empty_df.attrs['error_message'] = f"Found interventions for {intervention}, but no matching {var} data in the time windows."
+            empty_df.attrs['error_message'] = f"Found interventions for {instance}, but no matching {var} data in the time windows."
             return empty_df, None
 
         # Calculate the time since start/end of longest intervention/event
@@ -685,7 +724,7 @@ def get_calendar_events(user_name, start_date=None, end_date=None):
         
         query += " ORDER BY start_time"
         
-        df = pd.read_sql_query(query, conn)
+        df = get_df_from_query(query, conn)
         return df
     finally:
         cursor.close()

@@ -51,9 +51,8 @@ def clean_timestamp_data(df: pd.DataFrame):
         # Delete raw timestamp columns
         df = df.drop(columns = ["unixTimestampInMs", "timezoneOffsetInMs", "isoDate"])
     else:
-        local_offset = -time.timezone * 1000 # offset from UTC in ms
-        df["unix_timestamp_cleaned"] = df["unixTimestampInMs"] + local_offset
-        df["timestamp_cleaned"] = df["unixTimestampInMs"] + local_offset
+        df["unix_timestamp_cleaned"] = df["unixTimestampInMs"] + LOCAL_OFFSET
+        df["timestamp_cleaned"] = df["unixTimestampInMs"] + LOCAL_OFFSET
         
         # Delete raw timestamp columns
         df = df.drop(columns = ["unixTimestampInMs", "timezone", "isoDate"])
@@ -214,12 +213,45 @@ def clean_data(binary_indicator, labfront_exported_data_path):
                 combined_df = pd.concat(dfs, ignore_index=True)
                 cleaned_df = clean_timestamp_data(combined_df)
                 if folder_name == "bbi":
+                    result["rmssd"] = calculate_rmssd(cleaned_df) # Add RMSSD data if BBI data is present
                     cleaned_df = smooth_data(cleaned_df, folder_name, 180, 90) # Smooth BBI data
                 elif folder_name == "step":
                     cleaned_df = cleaned_df[cleaned_df["steps"] != 0] # Drop all records where # of steps did not change
                 result[folder_name] = cleaned_df
 
     return result
+
+def calculate_rmssd(input_df:pd.DataFrame, window_seconds:int=15*60, step_seconds:int=5*60, threshold_seconds:int=30*60, min_valid_count:int=20) -> pd.DataFrame:
+    # Make a copy of the dataframe to avoid changing the original
+    df = input_df.copy()
+
+    # Set cleaned timeframe as index
+    df = df.set_index("timestamp_cleaned")
+
+    # Compute squared distance
+    df = df.sort_index()
+    time_diff = df.index.to_series().diff(1).dt.total_seconds()
+    bbi_diff_sq = df["bbi"].astype("float32").diff(1) ** 2
+
+    # Get sum and counts of squared distance
+    bbi_diff_sq_sum = bbi_diff_sq.rolling(f"{window_seconds}s", min_periods=1).sum().where(time_diff <= threshold_seconds)
+    bbi_diff_sq_count = bbi_diff_sq.rolling(f"{window_seconds}s", min_periods=1).count().where(time_diff <= threshold_seconds)
+
+    # Create new column only for valid intervals
+    df["bbi_diff_sq_sum"] = bbi_diff_sq_sum.where(time_diff <= threshold_seconds)
+    df["bbi_diff_sq_count"] = bbi_diff_sq_count.where(time_diff <= threshold_seconds)
+
+    # Resample to get RMSSD in specific step intervals
+    resampled_df = df.resample(f"{step_seconds}s").agg({"bbi_diff_sq_sum":"sum", "bbi_diff_sq_count":"sum","deviceType":"last","unix_timestamp_cleaned":"last"})
+
+    # Calculate mean of squared distance and take square root to get RMSSD
+    resampled_df["rmssd"] = (resampled_df["bbi_diff_sq_sum"] / resampled_df["bbi_diff_sq_count"]) ** 0.5
+    resampled_df["rmssd"] = resampled_df["rmssd"].where(resampled_df["bbi_diff_sq_count"] >= min_valid_count)
+
+    # Reset index, drop intermediary columns and return the dataframe
+    resampled_df = resampled_df.reset_index()
+
+    return resampled_df
 
 def smooth_data(input_df:pd.DataFrame, var:str, window_seconds:int, step_seconds:int) -> pd.DataFrame:
     """

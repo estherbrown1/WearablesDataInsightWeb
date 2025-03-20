@@ -96,6 +96,8 @@ def create_moon_sleep_indicator(sleep_score, size=100, effect_color=None):
             fill_color = '#6EB9F7'
         elif effect_color == 'reds':
             fill_color = '#EF476F'
+        elif effect_color == 'purples':
+            fill_color = '#928FBF'
         else:
             fill_color = garmin_color(sleep_score)
 
@@ -121,7 +123,7 @@ def create_moon_sleep_indicator(sleep_score, size=100, effect_color=None):
 
         # Label
         ax.text(0, -1.3, label, ha='center', va='center',
-                fontsize=14, color='black', fontweight='bold')
+                fontsize=14, color=fill_color, fontweight='bold')
 
     # Convert figure to base64
     buf = io.BytesIO()
@@ -138,12 +140,12 @@ class ComparisonPlotsManager:
     # Attributes of the class
     instances_df: pd.DataFrame
     aggregate_df: pd.DataFrame
+    instance_type: str
     var: str
     var_to_label: dict
     mins_before: int
     mins_after: int
     split_comparison_plots: bool = False
-    max_instances: int = 5
     max_duration: float = 0.
     var_label: str = ""
     differences_df: pd.DataFrame = field(default_factory=pd.DataFrame)
@@ -156,20 +158,22 @@ class ComparisonPlotsManager:
             st.write(f"There are no valid data for {self.var_to_label[self.var].lower()} for any intervention.")
             return
         # Initialize neat variable name for labelling
-        self.var_label = self.var.title().replace("_"," ") if len(self.var) > 3 else self.var.upper()
+        self.var_label = self.var.title().replace("_"," ") if self.var.lower() not in ["bbi","rmssd"] else self.var.upper()
         # Get duration of longest intervention
         self.max_duration = (self.instances_df["duration"].dt.total_seconds() / 60).max()
         # Update segments to prevent interpolation of far points
         self.instances_df = update_time_segments(self.instances_df)
         # Add effect column to dataframes
         self.update_effect()
+        # Sort dataframes
+        self.update_instance_order()
         # Plot line plots with each instance trajectory
         self.plot_trajectories()
         # Plot bar plot with aggregated data
         self.plot_aggregate()
 
     @staticmethod
-    def combine_layers(layers:list[alt.Chart], title:str="", include_props:bool=False, resolve:str="independent") -> alt.Chart:
+    def combine_layers(layers:list[alt.Chart], resolve:str="independent", prop_kwargs:dict=None) -> alt.Chart:
         """Helper function to combine altair chart layers."""
         plot = alt.layer(
             *layers
@@ -178,15 +182,9 @@ class ComparisonPlotsManager:
             stroke=resolve,
         )
 
-        if include_props:
-            plot = plot.properties(
-                width=800,
-                height=400,
-                title=alt.Title(
-                    title, 
-                    anchor="middle"
-                )
-            )
+        if prop_kwargs is not None:
+            plot = plot.properties(**prop_kwargs) 
+
         return plot
                 
 
@@ -222,7 +220,7 @@ class ComparisonPlotsManager:
             # For stress and heart rate, decrease is positive
             self.differences_df.loc[self.differences_df["mean"] < 0,"effect"] = "Positive"
             self.differences_df.loc[self.differences_df["mean"] >= 0,"effect"] = "Negative"
-        elif self.var == "bbi":
+        elif self.var in ["bbi","rmssd"]:
             # For bbi, increase is positive
             self.differences_df.loc[self.differences_df["mean"] > 0,"effect"] = "Positive"
             self.differences_df.loc[self.differences_df["mean"] <= 0,"effect"] = "Negative"
@@ -233,10 +231,18 @@ class ComparisonPlotsManager:
         for instance in self.differences_df["instance"].unique():
             self.instances_df.loc[self.instances_df["instance"] == instance, "effect"] = self.differences_df[self.differences_df["instance"] == instance]["effect"].iloc[0]
 
+    def update_instance_order(self) -> None:
+        """
+        Method that sorts the instance data according to its date and time.
+        """
+        # Convert instance name to datetime
+        instances_dt = pd.to_datetime(self.instances_df["instance"].unique(), format="%a %d %b %Y, %I:%M%p")
+        self.instance_order = [dt.strftime("%a %d %b %Y, %I:%M%p") for dt in sorted(instances_dt)]
 
-    def plot_trajectories(self) -> None:
+    def plot_trajectories(self):
         """
         Method to plot the trajectory of instances as lines.
+        Modified for better space usage and effect grouping with improved spacing.
         """
         # Get minimum and maximum of the variable
         var_min, var_max = self.instances_df[self.var].min(),  self.instances_df[self.var].max()
@@ -253,66 +259,101 @@ class ComparisonPlotsManager:
         # Initialize list of subplots 
         all_subplots = []
 
+        # Adjust properties based on view mode
+        if self.split_comparison_plots:
+            # Original heights for split view
+            default_height = 200
+            plot_spacing = 0  # Default spacing
+        else:
+            # More compact heights for effect-grouped view
+            default_height = 250  # Slightly shorter
+            plot_spacing = 20  # Positive spacing to create gap between plots
+        
         # Initialize inclusion of title
-        include_props = True
+        default_props = dict(
+            width=800,
+            height=default_height
+        )
 
         # Iterate through possible effects
-        for effect, effect_color in zip(["Positive", "Negative"],["blues", "reds"]):
-            # Filter based on effect of the intervention
-            effects_df = self.instances_df[self.instances_df["effect"] == effect]
-            if effects_df.empty: pass
+        effect_color_scheme = {"Positive":"blues", "Negative":"reds", "Neutral":"purples"}
+        
+        # Create separate plots
+        if self.split_comparison_plots:
+            # When in split view, create one plot per instance (original behavior)
+            dfs = [self.instances_df[self.instances_df["instance"] == instance] for instance in self.instance_order]
+        else:
+            # When in combined view, create one plot per effect type (modified behavior)
+            dfs = []
+            for effect in ["Positive", "Negative", "Neutral"]:  # Ensure consistent order
+                effect_df = self.instances_df[self.instances_df["effect"] == effect]
+                if not effect_df.empty:
+                    dfs.append(effect_df)
 
+        # Iterate through dataframes and plot each one
+        for i, instance_df in enumerate(dfs):
+            # Skip if dataframe is empty
+            if instance_df.empty:
+                continue
             # Define the conditional color logic for sleep data
-            color_condition = alt.condition(
-                alt.datum.sleep_label == "No Sleep Data",  
-                alt.value("gray"),  
-                alt.Color("instance:N", scale=alt.Scale(scheme=effect_color), legend=None)
-            )
+            effect = instance_df["effect"].iloc[0]
+            # If effect could not be calculated, skip the plot
+            if pd.isna(effect):
+                continue
+            effect_color = effect_color_scheme[effect]
+            instance_name = instance_df['instance'].iloc[0]
+            instances_to_process = [instance_name] if self.split_comparison_plots else instance_df["instance"].unique()
+            # Aggregate data for sleep reporting
+            sleep_df = instance_df.sort_values("mins").groupby("instance").aggregate({
+                "mins": "last", 
+                self.var: "last", 
+                "sleep_score": "last", 
+                "sleep_label": "last",
+                "effect": "first"  # Include effect in aggregation
+            }).reset_index()
+            sleep_df["dummy_outline"] = 100
+            # Plot the various components of the plot
+            instance_line_layers = self.create_trajectory_lines(instance_df, effect, effect_color, x_axis, y_scale)
+            instance_sleep_layers = self.create_trajectory_sleep_info(sleep_df)
+            instance_regression_layers = self.create_trajectory_regression(instance_df, instances_to_process, x_axis, y_scale, effect_color)
+            instance_event_layer = self.create_trajectory_events(instance_df)
             
-            # Create separate plots
-            if self.split_comparison_plots:
-                dfs = [effects_df[effects_df["instance"] == instance] for instance in effects_df["instance"].unique()]
-                dfs = dfs[:self.max_instances]
-            # Only a single plot
+            # Create props for this specific plot
+            subplot_props = default_props.copy()
+                        
+            # For effect-grouped mode (not split view)
+            if not self.split_comparison_plots:
+                if i == 0:  # First plot (Positive Effect)
+                    subplot_props["title"] = alt.Title(
+                        f"{self.var_label} - {effect} Effect",
+                        anchor="middle"
+                    )
+                else:  # Second plot (Negative Effect)
+                    # Add offset to the title to create more space
+                    subplot_props["title"] = alt.Title(
+                        f"{effect} Effect",
+                        anchor="middle",
+                        offset=15  # Increase title offset to add more space
+                    )
             else:
-                dfs = [effects_df]
-
-            # Iterate through dataframes and plot each one
-            for instance_df in dfs:
-                instance_name = instance_df['instance'].iloc[0]
-                instances_to_process = [instance_name] if self.split_comparison_plots else instance_df["instance"].unique()
-                # Aggregate data for sleep reporting
-                sleep_df = instance_df.sort_values("mins").groupby("instance").aggregate({
-                    "mins": "last", 
-                    self.var: "last", 
-                    "sleep_score": "last", 
-                    "sleep_label": "last",
-                    "effect": "first"  # Include effect in aggregation
-                }).reset_index()
-                sleep_df["dummy_outline"] = 100
-                # Plot the various components of the plot
-                instance_line_layers = self.create_trajectory_lines(instance_df, effect, effect_color, x_axis, y_scale)
-                instance_sleep_layers = self.create_trajectory_sleep_info(sleep_df, color_condition)
-                instance_regression_layers = self.create_trajectory_regression(instance_df, instances_to_process, x_axis, y_scale, effect_color)
-                instance_event_layer = self.create_trajectory_events(instance_df)
-                # Immediately display the plot if choosing split view
-                if self.split_comparison_plots:
-                    subplot_title = f"{self.var_label} Before, During, and After Intervention - {instance_name}"
-                    subplot = self.combine_layers([*labels_layers, *instance_line_layers, *instance_sleep_layers, *instance_regression_layers, instance_event_layer], title=f"{self.var_label} Before, During, and After Interventions", include_props=include_props)
-                    st.altair_chart(subplot, use_container_width=True)
-                    include_props = False
-                # Combine into a single list of all layers if choosing combined view
+                # Modified title behavior for split view
+                if i == 0:
+                    subplot_props["title"] = alt.Title(f"{self.var_label} Before, During, and After {self.instance_type.title()}")
                 else:
-                    all_line_layers.extend(instance_line_layers)
-                    all_sleep_layers.extend(instance_sleep_layers)
-                    all_regression_layers.extend(instance_regression_layers)
-                    all_event_layers.append(instance_event_layer)
+                    subplot_props["title"] = alt.Title("") # Remove instance name from title
+            
+            # Create the subplot
+            subplot = self.combine_layers([*labels_layers, *instance_line_layers, *instance_sleep_layers, *instance_regression_layers, instance_event_layer], prop_kwargs=subplot_props)
+            all_subplots.append(subplot)
 
-        if not self.split_comparison_plots:
-            combined_event_layer = self.combine_layers(all_event_layers, resolve="shared")
-            plot = self.combine_layers([*labels_layers, *all_line_layers, *all_sleep_layers, *all_regression_layers, combined_event_layer], title=f"{self.var_label} Before, During, and After Interventions", include_props=True)
+        # Create the final vertical concatenation of plots
+        if len(all_subplots) > 0:
+            # Create a vertical concatenation with POSITIVE spacing
+            plot = alt.vconcat(*all_subplots, spacing=plot_spacing).resolve_scale(color="shared", stroke="shared")
+            
+            # Render the plots
             st.altair_chart(plot, use_container_width=True)
-
+            
     def create_trajectory_x_axis(self) -> alt.X:
         """
         Creates and returns a custom Altair x-axis for the trajectory plot.
@@ -373,11 +414,11 @@ class ComparisonPlotsManager:
             df["event_name"].isna() & 
             df["calendar_name"].isna()
         ]).mark_line(
-            opacity=0.75
+            opacity=0.85
         ).encode(
             x=x_axis,
             y=alt.Y(f"{self.var}:Q", axis=alt.Axis(title=self.var_label), scale=y_scale),
-            color=alt.Color('instance:N', scale=alt.Scale(scheme=effect_color), legend=alt.Legend(title=f'Instance ({effect} Effect)')),
+            color=alt.Color('instance:N', scale=alt.Scale(scheme=effect_color), legend=alt.Legend(title=f'Instance ({effect} Effect)'), sort=self.instance_order),
             detail=alt.Detail(['status:N', 'segment:N', 'instance:N']),
             tooltip=[
                 alt.Tooltip("isoDate:T", title="Time", format=r"%c"),
@@ -386,7 +427,7 @@ class ComparisonPlotsManager:
             ]
         )
         lines_during = alt.Chart(df[df["status"] == "during"]).mark_line(
-                opacity=0.75
+                opacity=0.85
             ).encode(
                 x=x_axis,
                 y=alt.Y(f"{self.var}:Q", scale=y_scale),
@@ -400,18 +441,18 @@ class ComparisonPlotsManager:
             )
         return lines_before_after, lines_during
     
-    def create_trajectory_sleep_info(self, sleep_df:pd.DataFrame, color_condition:alt.condition, inner_radius=6, outer_radius=12, x_padding:float=1.065) -> tuple[alt.Chart, alt.Chart, alt.Chart]:
+    def create_trajectory_sleep_info(self, sleep_df:pd.DataFrame, inner_radius=6, outer_radius=12, x_padding:float=1.065) -> tuple[alt.Chart, alt.Chart, alt.Chart]:
         """
         Creates and returns Altair chart layers for sleep information
         """
-        shared_x_max = 0 if self.split_comparison_plots else self.instances_df["mins"].max()
+        shared_x_max = self.instances_df["mins"].max()
         
         # Generate moon images for each sleep score
         sleep_df = sleep_df.copy()  # Make a copy to avoid modifying the original
         
         # Determine the effect color scheme
         effect = sleep_df['effect'].iloc[0] if not sleep_df.empty and 'effect' in sleep_df.columns else None
-        effect_color = 'blues' if effect == 'Positive' else 'reds' if effect == 'Negative' else None
+        effect_color = 'blues' if effect == 'Positive' else 'reds' if effect == 'Negative' else 'purples'
         
         # Ensure sleep_label is properly set and replace null sleep scores with "No Sleep Data" text
         for idx, row in sleep_df.iterrows():
@@ -529,7 +570,7 @@ class ComparisonPlotsManager:
                         # Main dashed line on top
                         main_line = alt.Chart(regression_df).mark_line(
                             strokeWidth=2.3,    # Thicker main line
-                            opacity=0.7,      # Slightly transparent
+                            opacity=0.8,      # Slightly transparent
                             strokeDash=[4, 4] # Standard dashes
                         ).encode(
                             x=x_axis,
@@ -550,53 +591,52 @@ class ComparisonPlotsManager:
                     except Exception as e:
                         print(f"Linear regression failed: {e}")
 
-        return regression_layers
+        return [self.combine_layers(regression_layers, resolve="shared")]
 
     
     def create_trajectory_events(self, instance_df:pd.DataFrame) -> alt.Chart:
-        events = alt.Chart(instance_df[instance_df["event_name"].notna()]).mark_point(
-            filled=True,
-            opacity=0.8,
-            size=100,
-        ).encode(
-            x=alt.X("mins:Q"),
-            y=alt.Y(f"{self.var}:Q"),
-            color=alt.Color(
-                "event_legend:N",  
-                scale=alt.Scale(domain=["Event","Calendar Event"], range=["#FFD700","#32CD32"]),  
-                legend=alt.Legend(title="Events")
-            ),
-            tooltip=[
-                alt.Tooltip("event_name", title="Event"),
-                alt.Tooltip("event_start:T", title="Start Time", format=r"%c"),
-                alt.Tooltip("event_end:T", title="End Time", format=r"%c")
-            ]
-        ).transform_calculate(
-            event_legend="'Event'" 
-        )
-        calendar = alt.Chart(instance_df[instance_df["calendar_name"].notna()]).mark_point(
-            filled=True,
-            opacity=0.8,
-            size=100,
-            color="#32CD32",
-        ).encode(
-            x=alt.X("mins:Q"),
-            y=alt.Y(f"{self.var}:Q"),
-            color=alt.Color(
-                "event_legend:N",  
-                scale=alt.Scale(domain=["Event","Calendar Event"], range=["#FFD700","#32CD32"]),    
-                legend=None
-            ),
-            tooltip=[
-                alt.Tooltip("calendar_name", title="Calendar Event"),
-                alt.Tooltip("calendar_start:T", title="Start Time", format=r"%c"),
-                alt.Tooltip("calendar_end:T", title="End Time", format=r"%c")
-            ]
-        ).transform_calculate(
-            event_legend="'Calendar Event'" 
-        )
 
-        return self.combine_layers([events, calendar], resolve="shared")
+        # Initialize empty event lists
+        instance_types = []
+        instance_colors = []
+        event_df_list = []
+
+        # Iterate and filter through all event types
+        for instance, instance_color in zip(["Intervention","Event", "Calendar"], ["#F745DA","#FFD700","#32CD32"]):
+            instance_mask = instance_df[f"{instance.lower().replace(' ', '_')}_name"].notna()
+            # Only add to the lists if there are valid entries for the specific event in the dataframe
+            if instance_mask.sum() > 0:
+                instance_types.append(instance)
+                instance_colors.append(instance_color)
+                event_df_list.append(
+                    instance_df.loc[instance_mask, ["mins", self.var, f"{instance.lower()}_name", 
+                                                    f"{instance.lower()}_start", f"{instance.lower()}_end"
+                                                    ]].assign(event_legend=instance)
+                )
+        
+        # Return an empty chart if no valid events were found
+        if len(event_df_list) == 0:
+            return alt.Chart(pd.DataFrame()).mark_point() 
+        
+        # Concatenate all events into one dataframe and plot in a single chart layer
+        all_events_df = pd.concat(event_df_list)
+        color_scale = alt.Scale(domain=instance_types, range=instance_colors)
+        event_chart = alt.Chart(all_events_df).mark_point(
+            filled=True, opacity=0.8, size=100
+        ).encode(
+            x=alt.X("mins:Q"),
+            y=alt.Y(f"{self.var}:Q"),
+            color=alt.Color("event_legend:N", scale=color_scale, legend=alt.Legend(title="")),
+            tooltip=[
+                alt.Tooltip(f"{instance.lower()}_name:N", title=instance) for instance in instance_types
+            ] + [
+                alt.Tooltip(f"{instance.lower()}_start:T", title="Start Time", format=r"%c") for instance in instance_types
+            ] + [
+                alt.Tooltip(f"{instance.lower()}_end:T", title="End Time", format=r"%c") for instance in instance_types
+            ]
+        )
+        
+        return event_chart
     
     def plot_aggregate(self):
 
@@ -604,23 +644,33 @@ class ComparisonPlotsManager:
         if self.aggregate_df.empty:
             return
         
-        bars_layers = []
+        bar_charts = []
+        first_plot = True
         for effect, color_scheme in zip(['Positive','Negative'], ['blues','reds']):
             effect_differences_df = self.differences_df[self.differences_df["effect"] == effect]
-                
-            bars = alt.Chart(effect_differences_df).mark_bar().encode(
-                x = alt.X("instance:N", axis=alt.Axis(title="Instance", labels=False)),
-                y = alt.Y("mean:Q", axis=alt.Axis(title=f"% Change in {self.var_label}", format='%')),
-                color = alt.Color("instance:N", scale=alt.Scale(scheme=color_scheme), legend=alt.Legend(title=f"Instance ({effect} Effect)")), #
-            ).properties(
-                title=alt.Title(f"% Change in {self.var_label} Before and After Intervention", anchor="middle")
-            )
-            bars_layers.append(bars)
+            if effect_differences_df.empty: continue
 
-        bars_all = alt.layer(*bars_layers).resolve_scale(color='independent')
+            bars = alt.Chart(effect_differences_df).mark_bar()
+            if first_plot:
+                bars = bars.properties(title=alt.Title(f"% Change in {self.var_label} Before and After {self.instance_type.title()}", anchor="middle"))
+                y_axis_title = ""
+                first_plot = False
+            else:
+                y_axis_title = f"% Change in {self.var_label}"
+            
+            bars = bars.encode(
+                y = alt.Y("instance:N", axis=alt.Axis(title="", labels=False), sort=self.instance_order),
+                x = alt.X("mean:Q", axis=alt.Axis(title=y_axis_title, format='%')),
+                color = alt.Color("instance:N", scale=alt.Scale(scheme=color_scheme), legend=alt.Legend(title=f"Instance ({effect} Effect)"), sort=self.instance_order),
+            )
+
+            bar_charts.append(bars)
+
+        if len(bar_charts) == 0: return
 
         # Render the chart in Streamlit
-        st.altair_chart(bars_all, use_container_width=True)
+        chart = alt.vconcat(*bar_charts).resolve_scale(color="independent", x="shared")
+        st.altair_chart(chart, use_container_width=True)
 
 def get_plot(var:str, df:pd.DataFrame):
     """
@@ -636,6 +686,8 @@ def get_plot(var:str, df:pd.DataFrame):
         chart = plot_respiration(df)
     elif var == "Beat-to-beat Interval":
         chart = plot_bbi(df)
+    elif var == "Heart Rate Variability":
+        chart = plot_rmssd(df)
     elif var == "Steps Taken":
         chart = plot_steps(df)
     return chart
@@ -712,7 +764,7 @@ def plot_stress_level(stress: pd.DataFrame):
     formatted_max_date = pd.to_datetime(max_date).strftime('%Y-%m-%d %H:%M')
 
     # Create the Altair chart
-    chart = alt.Chart(stress).mark_rule(opacity=0.7).encode(
+    chart = alt.Chart(stress).mark_rule(opacity=0.8).encode(
         x=alt.X('isoDate:T', title='Timestamp', axis=alt.Axis(format='%Y-%m-%d %H:%M', labelAngle=45)),
         y=alt.Y('stressLevel:Q', title='Stress level value'),
         color=alt.Color('stress_indicator:N', 
@@ -778,7 +830,7 @@ def plot_heart_rate(df: pd.DataFrame):
     formatted_max_date = pd.to_datetime(max_date).strftime('%Y-%m-%d %H:%M')
 
     # Create the Altair chart
-    chart = alt.Chart(df).mark_line(opacity=0.7).encode(
+    chart = alt.Chart(df).mark_line(opacity=0.8).encode(
         x=alt.X('isoDate:T', title='Timestamp', axis=alt.Axis(format='%Y-%m-%d %H:%M', labelAngle=45)),
         y=alt.Y('beatsPerMinute:Q', title='Heart rate (bpm)'),
         detail="segment:N",
@@ -818,7 +870,7 @@ def plot_respiration(respiration: pd.DataFrame):
     formatted_max_date = pd.to_datetime(max_date).strftime('%Y-%m-%d %H:%M')
 
     # Create the Altair chart for respiration rate
-    chart = alt.Chart(respiration).mark_line(opacity=0.7).encode(
+    chart = alt.Chart(respiration).mark_line(opacity=0.8).encode(
         x=alt.X('isoDate:T', title='Timestamp', axis=alt.Axis(format='%Y-%m-%d %H:%M', labelAngle=45)),
         y=alt.Y('breathsPerMinute:Q', title='Respiration rate (breaths per minute)'),
         color=alt.value('green'),  # Use a single color for respiration rate plot
@@ -843,11 +895,11 @@ def plot_bbi(bbi: pd.DataFrame) -> alt.Chart:
     formatted_min_date = pd.to_datetime(min_date).strftime('%Y-%m-%d %H:%M')
     formatted_max_date = pd.to_datetime(max_date).strftime('%Y-%m-%d %H:%M')
 
-    chart = alt.Chart(bbi).mark_line(opacity=0.7).encode(
+    chart = alt.Chart(bbi).mark_line(opacity=0.8).encode(
         x=alt.X('isoDate:T', title='Timestamp', axis=alt.Axis(format='%Y-%m-%d %H:%M', labelAngle=45)),
         y=alt.Y('bbi:Q', title='Beat-to-beat interval (ms)', 
                 axis=alt.Axis(titlePadding=15)),  # Add padding to prevent cutoff
-        color=alt.value('red'),
+        color=alt.value('tomato'),
         detail="segment:N",
         tooltip=[
                 alt.Tooltip("isoDate:T", title="Time", format=r"%c"),
@@ -857,10 +909,37 @@ def plot_bbi(bbi: pd.DataFrame) -> alt.Chart:
         width=800,
         height=400,
         title=f'Beat-to-beat interval over time from {formatted_min_date} to {formatted_max_date}'
-        # Remove padding property from here
     )
 
     return chart
+
+def plot_rmssd(rmssd: pd.DataFrame) -> alt.Chart:
+    # Get the minimum and maximum dates for the title
+    min_date = rmssd['isoDate'].min()
+    max_date = rmssd['isoDate'].max()
+
+    # Format the dates to include in the title
+    formatted_min_date = pd.to_datetime(min_date).strftime('%Y-%m-%d %H:%M')
+    formatted_max_date = pd.to_datetime(max_date).strftime('%Y-%m-%d %H:%M')
+
+    # Create altair chart
+    chart = alt.Chart(rmssd).mark_line(opacity=0.8).encode(
+        x=alt.X('isoDate:T', title='Timestamp', axis=alt.Axis(format='%Y-%m-%d %H:%M', labelAngle=45)),
+        y=alt.Y('rmssd:Q', title='RMSSD (ms)', 
+                axis=alt.Axis(titlePadding=15)),  # Add padding to prevent cutoff
+        color=alt.value('teal'),
+        detail="segment:N",
+        tooltip=[
+                alt.Tooltip("isoDate:T", title="Time", format=r"%c"),
+                alt.Tooltip(f"rmssd:Q", title="RMSSD (ms)", format=r".2f"),
+            ],
+    ).properties(
+        width=800,
+        height=400,
+        title=f'Heart Rate Variability over time from {formatted_min_date} to {formatted_max_date}'
+    )
+    
+    return chart 
 
 def plot_steps(steps: pd.DataFrame) -> alt.Chart:
 
@@ -872,10 +951,10 @@ def plot_steps(steps: pd.DataFrame) -> alt.Chart:
     formatted_min_date = pd.to_datetime(min_date).strftime('%Y-%m-%d %H:%M')
     formatted_max_date = pd.to_datetime(max_date).strftime('%Y-%m-%d %H:%M')
 
-    chart = alt.Chart(steps).mark_rule(opacity=0.7).encode(
+    chart = alt.Chart(steps).mark_rule(opacity=0.8).encode(
         x=alt.X('isoDate:T', title='Timestamp', axis=alt.Axis(format='%Y-%m-%d %H:%M', labelAngle=45)),
         y=alt.Y('totalSteps:Q', title='Cumulative Steps Per Day'),
-        color=alt.value('lightblue'),
+        color=alt.value('sienna'),
         detail="segment:N",
         tooltip=[
                 alt.Tooltip("isoDate:T", title="Time", format=r"%c"),
