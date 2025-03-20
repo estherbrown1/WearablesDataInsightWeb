@@ -15,7 +15,7 @@ def inject_google_analytics():
       function gtag(){dataLayer.push(arguments);}
       gtag('js', new Date());
 
-      gtag('config', 'G-P31FMHW9FQ', { 'debug_mode': true });
+      gtag('config', 'G-P31FMHW9FQ');
     </script>
     
     <!-- Empty div to avoid affecting page layout -->
