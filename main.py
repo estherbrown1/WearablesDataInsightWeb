@@ -7,31 +7,31 @@ from upload_calendar import calendar_upload_page
 from download_data import download_user_data
 from sql_utils import get_admin_name
 from home import home_page 
-from analytics import inject_google_analytics, track_page_view
-# from log import log_page
-# from sql_utils import get_rds_connection
 
+# Importing the two GA functions from analytics.py
+from analytics import inject_google_analytics, track_page_view
 
 def main():
-    # Inject Google Analytics at the start of the app
+    # 1) Inject Google Analytics once
     inject_google_analytics()
     
     st.sidebar.title('Main Menu')
     page = st.sidebar.radio('Go to', [
-         'Home',
-        'Signup', 
-        'Login',    
+        'Home',
+        'Login',
         'Enter Annotations',
         'Show Annotations',
         'Compare Interventions',
-        'Calendar Upload', 
+        'Calendar Upload',
+        'Signup - Admin',
         'Upload Data - Admin',
         'Download Data - Admin'
     ])
 
-    # Track page view whenever page changes
+    # 2) Track page view whenever page changes
     track_page_view(page)
 
+    # The rest of the app
     st.session_state.logged_in = st.session_state.get('logged_in', False)
 
     if page == 'Home':

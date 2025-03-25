@@ -581,7 +581,7 @@ def get_instances(user:str, instance_type:str, instance:str, mins_before:int, mi
                     var_df["sleep_label"] = "No Sleep Data"
 
                 # Concatenate with all other instances
-                instance_id = pd.to_datetime(instance_start, unit="ms").strftime("%a %d %b %Y, %I:%M%p")
+                instance_id = pd.to_datetime(instance_start, unit="ms") #.strftime("%a %d %b %Y, %I:%M%p")
                 var_df["instance"] = instance_id
                 instances_df = pd.concat([instances_df, var_df], axis=0)
             

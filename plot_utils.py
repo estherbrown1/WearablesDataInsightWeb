@@ -149,6 +149,7 @@ class ComparisonPlotsManager:
     max_duration: float = 0.
     var_label: str = ""
     differences_df: pd.DataFrame = field(default_factory=pd.DataFrame)
+    scheme_domains: dict = field(default_factory=dict)
 
     def __post_init__(self):
         # Only display valid data
@@ -167,6 +168,8 @@ class ComparisonPlotsManager:
         self.update_effect()
         # Sort dataframes
         self.update_instance_order()
+        # Update instance labels
+        self.update_instance_labels()
         # Plot line plots with each instance trajectory
         self.plot_trajectories()
         # Plot bar plot with aggregated data
@@ -227,9 +230,10 @@ class ComparisonPlotsManager:
         else:
             self.differences_df["effect"] = "Neutral"
 
-        # Update instances_df with effect
+        # Update instances_df
         for instance in self.differences_df["instance"].unique():
             self.instances_df.loc[self.instances_df["instance"] == instance, "effect"] = self.differences_df[self.differences_df["instance"] == instance]["effect"].iloc[0]
+            self.instances_df.loc[self.instances_df["instance"] == instance, "pct_change"] = self.differences_df[self.differences_df["instance"] == instance]["mean"].iloc[0]
 
     def update_instance_order(self) -> None:
         """
@@ -238,6 +242,22 @@ class ComparisonPlotsManager:
         # Convert instance name to datetime
         instances_dt = pd.to_datetime(self.instances_df["instance"].unique(), format="%a %d %b %Y, %I:%M%p")
         self.instance_order = [dt.strftime("%a %d %b %Y, %I:%M%p") for dt in sorted(instances_dt)]
+
+    def update_instance_labels(self) -> None:
+        """
+        Method that adds an "instance_label" field to each dataframe.
+        """
+        self.instances_df["instance_label"] = self.instances_df["instance"].dt.strftime(r"%a %d %b, %I:%M%p").str.cat(self.instances_df.apply(
+            lambda row: f' ({row["pct_change"]:.2%} increase)' if row["pct_change"] > 0 else f' ({-row["pct_change"]:.2%} decrease)', axis=1
+        ))
+        self.differences_df["instance_label"] = self.differences_df["instance"].dt.strftime(r"%a %d %b, %I:%M%p").str.cat(self.differences_df.apply(
+            lambda row: f' ({row["mean"]:.2%} increase)' if row["mean"] > 0 else f' ({-row["mean"]:.2%} decrease)', axis=1
+        ))
+        
+        # Update effects color scheme
+        self.scheme_domains = {"Positive":[], "Negative":[], "Neutral":[]}
+        for effect in self.scheme_domains.keys():
+            self.scheme_domains[effect].extend(list(self.differences_df.loc[self.differences_df["effect"] == effect, "instance_label"]))
 
     def plot_trajectories(self):
         """
@@ -263,7 +283,7 @@ class ComparisonPlotsManager:
         if self.split_comparison_plots:
             # Original heights for split view
             default_height = 200
-            plot_spacing = 0  # Default spacing
+            plot_spacing = 10  # Default spacing
         else:
             # More compact heights for effect-grouped view
             default_height = 250  # Slightly shorter
@@ -275,8 +295,7 @@ class ComparisonPlotsManager:
             height=default_height
         )
 
-        # Iterate through possible effects
-        effect_color_scheme = {"Positive":"blues", "Negative":"reds", "Neutral":"purples"}
+        effect_color_scale = {k: alt.Scale(scheme=s, domain=v) for s, (k,v) in zip(["blues","reds","purples"], self.scheme_domains.items())}
         
         # Create separate plots
         if self.split_comparison_plots:
@@ -300,9 +319,8 @@ class ComparisonPlotsManager:
             # If effect could not be calculated, skip the plot
             if pd.isna(effect):
                 continue
-            effect_color = effect_color_scheme[effect]
-            instance_name = instance_df['instance'].iloc[0]
-            instances_to_process = [instance_name] if self.split_comparison_plots else instance_df["instance"].unique()
+            instance_name = instance_df['instance_label'].iloc[0]
+            instances_to_process = [instance_name] if self.split_comparison_plots else instance_df["instance_label"].unique()
             # Aggregate data for sleep reporting
             sleep_df = instance_df.sort_values("mins").groupby("instance").aggregate({
                 "mins": "last", 
@@ -313,9 +331,9 @@ class ComparisonPlotsManager:
             }).reset_index()
             sleep_df["dummy_outline"] = 100
             # Plot the various components of the plot
-            instance_line_layers = self.create_trajectory_lines(instance_df, effect, effect_color, x_axis, y_scale)
+            instance_line_layers = self.create_trajectory_lines(instance_df, effect, effect_color_scale[effect], x_axis, y_scale)
             instance_sleep_layers = self.create_trajectory_sleep_info(sleep_df)
-            instance_regression_layers = self.create_trajectory_regression(instance_df, instances_to_process, x_axis, y_scale, effect_color)
+            instance_regression_layers = self.create_trajectory_regression(instance_df, instances_to_process, x_axis, y_scale, effect_color_scale[effect])
             instance_event_layer = self.create_trajectory_events(instance_df)
             
             # Create props for this specific plot
@@ -349,7 +367,7 @@ class ComparisonPlotsManager:
         # Create the final vertical concatenation of plots
         if len(all_subplots) > 0:
             # Create a vertical concatenation with POSITIVE spacing
-            plot = alt.vconcat(*all_subplots, spacing=plot_spacing).resolve_scale(color="shared", stroke="shared")
+            plot = alt.vconcat(*all_subplots, spacing=plot_spacing).resolve_scale(color="shared", stroke="shared").resolve_legend(color="independent", stroke="independent")
             
             # Render the plots
             st.altair_chart(plot, use_container_width=True)
@@ -371,7 +389,9 @@ class ComparisonPlotsManager:
                     : datum.value >= {self.mins_before+int(self.max_duration)} ? 
                       datum.value - {self.mins_before+int(self.max_duration)}
                     : datum.value - {self.mins_before}
-                """
+                """,
+                labelPadding=5,
+                titlePadding=5,
             )
         )
         return x_axis
@@ -404,7 +424,7 @@ class ComparisonPlotsManager:
         })).mark_rule(color="red").encode(x="x:Q",tooltip=alt.value(None))
         return [section_labels, vbar_marks]
     
-    def create_trajectory_lines(self, df:pd.DataFrame, effect:str, effect_color:str, 
+    def create_trajectory_lines(self, df:pd.DataFrame, effect:str, effect_scale:alt.Scale, 
                                 x_axis:alt.X, y_scale:alt.Scale) -> tuple[alt.Chart, alt.Chart]:
         """
         Creates and returns Altair chart layers for lines representing trajectories of instances.
@@ -418,12 +438,14 @@ class ComparisonPlotsManager:
         ).encode(
             x=x_axis,
             y=alt.Y(f"{self.var}:Q", axis=alt.Axis(title=self.var_label), scale=y_scale),
-            color=alt.Color('instance:N', scale=alt.Scale(scheme=effect_color), legend=alt.Legend(title=f'Instance ({effect} Effect)'), sort=self.instance_order),
-            detail=alt.Detail(['status:N', 'segment:N', 'instance:N']),
+            color=alt.Color('instance_label:N', scale=effect_scale, 
+                            legend=alt.Legend(title=f'Instance ({effect} Effect)', orient="top", direction="vertical", labelLimit=400, values=df["instance_label"].unique()),
+                            sort=self.instance_order),
+            detail=alt.Detail(['status:N', 'segment:N', 'instance_label:N']),
             tooltip=[
                 alt.Tooltip("isoDate:T", title="Time", format=r"%c"),
                 alt.Tooltip(f"{self.var}:Q", title=self.var_label.title()),
-                alt.Tooltip("instance:N", title="Instance")
+                alt.Tooltip("instance_label:N", title="Instance")
             ]
         )
         lines_during = alt.Chart(df[df["status"] == "during"]).mark_line(
@@ -431,12 +453,12 @@ class ComparisonPlotsManager:
             ).encode(
                 x=x_axis,
                 y=alt.Y(f"{self.var}:Q", scale=y_scale),
-                color=alt.Color('instance:N', scale=alt.Scale(scheme=effect_color), legend=None),
-                detail=alt.Detail('instance:N'),
+                color=alt.Color('instance_label:N', scale=effect_scale, legend=None),
+                detail=alt.Detail('instance_label:N'),
                 tooltip=[
                     alt.Tooltip("isoDate:T", title="Time", format=r"%c"),
                     alt.Tooltip(f"{self.var}:Q", title=self.var_label.title()),
-                    alt.Tooltip("instance:N", title="Instance"),
+                    alt.Tooltip("instance_label:N", title="Instance"),
                 ]
             )
         return lines_before_after, lines_during
@@ -485,7 +507,7 @@ class ComparisonPlotsManager:
             y=alt.Y(f"{self.var}:Q"),
             url='moon_image:N',
             tooltip=[
-                alt.Tooltip("instance:N", title="Instance"),
+                alt.Tooltip("instance_label:N", title="Instance"),
                 alt.Tooltip("sleep_label:N", title="Sleep Quality"),
                 alt.Tooltip("sleep_score_display:N", title="Sleep Score")
             ]
@@ -501,7 +523,7 @@ class ComparisonPlotsManager:
     
     def create_trajectory_regression(self, instance_df:pd.DataFrame, 
                                     instances_to_process:list[str], 
-                                    x_axis:alt.X, y_scale:alt.Scale, color_scheme:str,
+                                    x_axis:alt.X, y_scale:alt.Scale, effect_scale:alt.Scale,
                                     regression_method:str="simple") -> list[alt.Chart]:
         """
         Method that creates regression trend lines using simple linear regression.
@@ -513,7 +535,7 @@ class ComparisonPlotsManager:
             # Process each period separately
             for period in ['before', 'during', 'after']:
                 # Get data for this instance and period
-                period_data = instance_df[(instance_df['instance'] == instance) & 
+                period_data = instance_df[(instance_df['instance_label'] == instance) & 
                                         (instance_df['status'] == period)]
                 
                 # Only proceed if there are enough points for linear regression
@@ -539,9 +561,8 @@ class ComparisonPlotsManager:
                             "mins": x_hat,
                             f"{self.var}_fit": y_hat,
                             "period": period,
-                            "instance": instance
+                            "instance_label": instance
                         })
-                        
                         # Create a highlighter effect with dashed lines
                         
                         # Wide, very transparent background (no dashes)
@@ -551,7 +572,7 @@ class ComparisonPlotsManager:
                         ).encode(
                             x=x_axis,
                             y=alt.Y(f"{self.var}_fit:Q", scale=y_scale),
-                            color=alt.Color("instance:N", scale=alt.Scale(scheme=color_scheme), legend=None),
+                            color=alt.Color("instance_label:N", scale=effect_scale, legend=None),
                             tooltip=alt.value(None)
                         )
                         
@@ -563,7 +584,7 @@ class ComparisonPlotsManager:
                         ).encode(
                             x=x_axis,
                             y=alt.Y(f"{self.var}_fit:Q", scale=y_scale),
-                            color=alt.Color("instance:N", scale=alt.Scale(scheme=color_scheme), legend=None),
+                            color=alt.Color("instance_label:N", scale=effect_scale, legend=None),
                             tooltip=alt.value(None)
                         )
                         
@@ -575,9 +596,9 @@ class ComparisonPlotsManager:
                         ).encode(
                             x=x_axis,
                             y=alt.Y(f"{self.var}_fit:Q", scale=y_scale),
-                            color=alt.Color("instance:N", scale=alt.Scale(scheme=color_scheme), legend=None),
+                            color=alt.Color("instance_label:N", scale=effect_scale, legend=None),
                             tooltip=[
-                                alt.Tooltip("instance:N", title="Instance"),
+                                alt.Tooltip("instance_label:N", title="Instance"),
                                 alt.Tooltip("period:N", title="Period"),
                                 alt.Tooltip(f"{self.var}_fit:Q", title=self.var_label, format=".1f")
                             ]
@@ -641,7 +662,7 @@ class ComparisonPlotsManager:
     def plot_aggregate(self):
 
         # Don't plot anything if no data are found
-        if self.aggregate_df.empty:
+        if self.differences_df.empty:
             return
         
         bar_charts = []
@@ -659,9 +680,9 @@ class ComparisonPlotsManager:
                 y_axis_title = f"% Change in {self.var_label}"
             
             bars = bars.encode(
-                y = alt.Y("instance:N", axis=alt.Axis(title="", labels=False), sort=self.instance_order),
+                y = alt.Y("instance_label:N", axis=alt.Axis(title="", labels=False), sort=self.instance_order),
                 x = alt.X("mean:Q", axis=alt.Axis(title=y_axis_title, format='%')),
-                color = alt.Color("instance:N", scale=alt.Scale(scheme=color_scheme), legend=alt.Legend(title=f"Instance ({effect} Effect)"), sort=self.instance_order),
+                color = alt.Color("instance_label:N", scale=alt.Scale(scheme=color_scheme), legend=alt.Legend(title=f"Instance ({effect} Effect)"), sort=self.instance_order),
             )
 
             bar_charts.append(bars)
