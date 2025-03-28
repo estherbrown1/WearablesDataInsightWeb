@@ -23,9 +23,9 @@ def main():
         'Show Annotations',
         'Compare Interventions',
         'Calendar Upload',
-        'Signup - Admin',
         'Upload Data - Admin',
-        'Download Data - Admin'
+        'Download Data - Admin',
+        'Signup',
     ])
 
     # 2) Track page view whenever page changes
@@ -36,7 +36,7 @@ def main():
 
     if page == 'Home':
         home_page()
-    elif page == 'Signup - Admin':
+    elif page == 'Signup':
         signup_page()
     elif page == 'Login':
         login_successful = login_page()

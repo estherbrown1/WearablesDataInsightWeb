@@ -682,7 +682,11 @@ class ComparisonPlotsManager:
             bars = bars.encode(
                 y = alt.Y("instance_label:N", axis=alt.Axis(title="", labels=False), sort=self.instance_order),
                 x = alt.X("mean:Q", axis=alt.Axis(title=y_axis_title, format='%')),
-                color = alt.Color("instance_label:N", scale=alt.Scale(scheme=color_scheme), legend=alt.Legend(title=f"Instance ({effect} Effect)"), sort=self.instance_order),
+                color = alt.Color("instance_label:N", scale=alt.Scale(scheme=color_scheme), legend=alt.Legend(title=f"Instance ({effect} Effect)", orient="top", direction="vertical", labelLimit=400), sort=self.instance_order),
+                tooltip=[
+                    alt.Tooltip('instance_label:N', title='Instance'),
+                    alt.Tooltip('mean:Q', title=f'% Change in {self.var_label}', formatType="number", format=".2%"),
+                ]
             )
 
             bar_charts.append(bars)
