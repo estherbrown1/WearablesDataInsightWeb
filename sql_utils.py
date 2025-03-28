@@ -12,10 +12,10 @@ else:
 
 def get_rds_connection():
     return pymysql.connect(
-        host="apcomp297.chg8skogwghf.us-east-2.rds.amazonaws.com",  # Your RDS endpoint
-        user="yilinw",  # Your RDS username
-        password="wearable42",  # Your RDS password
-        database="wearable",  # Database name on RDS
+        host="researchwearables.ct0y6yck0s1w.us-east-2.rds.amazonaws.com",  # Your RDS endpoint
+        user="wearables2",  # Your RDS username
+        password="wearables2",  # Your RDS password
+        database="researchwearables",  # Database name on RDS
         port=3306
     )
 
@@ -57,21 +57,80 @@ def check_user_credentials(username, password=None):
         conn.close()
 
 def fetch_past_options(user_name, var_name="events"):
+    """
+    Function that fetches past events/interventions for a user.
+    
+    Parameters:
+        user_name (str): The username
+        var_name (str): The variable name ('events' or 'interventions')
+    
+    Returns:
+        list: A list of event/intervention names
+    """
     conn = get_rds_connection()
     cursor = conn.cursor()
-
-    # Fetch distinct options based on the user name from the RDS database
-    cursor.execute(f"SELECT {var_name} FROM users WHERE name = %s", (user_name,))
-    past_responses = cursor.fetchall()
-
-    conn.close()
-
-    # Convert the results into a flat list of strings
-    options = []
-    if past_responses and past_responses[0][0]:  # Check if past responses exist and are not None
-        options = past_responses[0][0].split("|||")  # Split on delimiter used in your database
-
-    return options
+    
+    try:
+        # First check if the table exists
+        cursor.execute(f"""
+            SELECT COUNT(*)
+            FROM information_schema.tables
+            WHERE table_name = '{var_name}'
+        """)
+        
+        if cursor.fetchone()[0] == 0:
+            # Table doesn't exist yet
+            return []
+            
+        # If table exists, query the appropriate columns
+        try:
+            # Try with plural column name (table name)
+            cursor.execute(f"""
+                SELECT DISTINCT {var_name}
+                FROM {var_name}
+                WHERE name = %s
+            """, (user_name,))
+            
+            results = [row[0] for row in cursor.fetchall() if row[0] is not None]
+            
+            # If we got results, return them
+            if results:
+                return results
+                
+            # If no results, try with singular column name
+            cursor.execute(f"""
+                SELECT DISTINCT {var_name[:-1]}
+                FROM {var_name}
+                WHERE name = %s
+            """, (user_name,))
+            
+            return [row[0] for row in cursor.fetchall() if row[0] is not None]
+            
+        except pymysql.err.OperationalError as e:
+            # If "Unknown column", try the singular form
+            if "Unknown column" in str(e):
+                try:
+                    cursor.execute(f"""
+                        SELECT DISTINCT {var_name[:-1]}
+                        FROM {var_name}
+                        WHERE name = %s
+                    """, (user_name,))
+                    
+                    return [row[0] for row in cursor.fetchall() if row[0] is not None]
+                except Exception:
+                    # If that fails too, return empty list
+                    return []
+            else:
+                # For any other error, return empty list
+                return []
+                
+    except Exception as e:
+        # Log error but don't crash
+        print(f"Error fetching past options: {str(e)}")
+        return []
+        
+    finally:
+        conn.close()
 
 def save_other_response(user_name, response, var_name="events"):
     conn = get_rds_connection()

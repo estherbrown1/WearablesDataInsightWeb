@@ -36,7 +36,7 @@ def main():
 
     if page == 'Home':
         home_page()
-    elif page == 'Signup':
+    elif page == 'Signup - Admin':
         signup_page()
     elif page == 'Login':
         login_successful = login_page()
