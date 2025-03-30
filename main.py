@@ -25,9 +25,9 @@ def main():
        'Show Annotations',
        'Compare Interventions',
        'Calendar Upload',
+       'Signup - Admin',
        'Upload Data - Admin',
        'Download Data - Admin',
-       'Signup - Admin',
        'Feature Extractions - Admin'
    ])
 
