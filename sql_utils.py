@@ -12,10 +12,10 @@ else:
 
 def get_rds_connection():
     return pymysql.connect(
-        host="researchwearables.ct0y6yck0s1w.us-east-2.rds.amazonaws.com",  # Your RDS endpoint
-        user="wearables2",  # Your RDS username
-        password="wearables2",  # Your RDS password
-        database="researchwearables",  # Database name on RDS
+        host="apcomp297.chg8skogwghf.us-east-2.rds.amazonaws.com",  # Your RDS endpoint
+        user="yilinw",  # Your RDS username
+        password="wearable42",  # Your RDS password
+        database="wearable",  # Database name on RDS
         port=3306
     )
 
@@ -59,6 +59,7 @@ def check_user_credentials(username, password=None):
 def fetch_past_options(user_name, var_name="events"):
     """
     Function that fetches past events/interventions for a user.
+    Tries both approaches - querying users table and dedicated tables.
     
     Parameters:
         user_name (str): The username
@@ -71,6 +72,23 @@ def fetch_past_options(user_name, var_name="events"):
     cursor = conn.cursor()
     
     try:
+        # APPROACH 1: Try getting from users table first (old method)
+        try:
+            cursor.execute(f"SELECT {var_name} FROM users WHERE name = %s", (user_name,))
+            past_responses = cursor.fetchall()
+            
+            # Convert the results into a flat list of strings
+            options = []
+            if past_responses and past_responses[0][0]:  # Check if past responses exist and are not None
+                options = past_responses[0][0].split("|||")  # Split on delimiter
+                if options and options[0]:  # Only return if we actually got data
+                    return options
+                    
+        except pymysql.err.OperationalError:
+            # If this fails (column doesn't exist), continue to approach 2
+            pass
+            
+        # APPROACH 2: Try getting from dedicated tables (new method)
         # First check if the table exists
         cursor.execute(f"""
             SELECT COUNT(*)
@@ -131,29 +149,46 @@ def fetch_past_options(user_name, var_name="events"):
         
     finally:
         conn.close()
+    
+    # If all approaches fail, return empty list
+    return []
 
 def save_other_response(user_name, response, var_name="events"):
+    """Modified to add missing columns if needed"""
     conn = get_rds_connection()
     cursor = conn.cursor()
 
-    # Fetch existing responses from the specified column for the user
-    cursor.execute(f"SELECT {var_name} FROM users WHERE name = %s", (user_name,))
-    past_responses = cursor.fetchall()
+    try:
+        # Check if column exists in users table
+        cursor.execute("DESCRIBE users")
+        columns = [column[0] for column in cursor.fetchall()]
+        
+        # Add column if it doesn't exist
+        if var_name not in columns:
+            cursor.execute(f"ALTER TABLE users ADD COLUMN {var_name} TEXT")
+            conn.commit()
+        
+        # Now we can safely fetch past responses
+        cursor.execute(f"SELECT {var_name} FROM users WHERE name = %s", (user_name,))
+        past_responses = cursor.fetchall()
 
-    # Convert the results into a flat list of strings
-    options = []
-    if past_responses and past_responses[0][0]:  # Check if past responses exist and are not None
-        options = past_responses[0][0].split("|||")
-    
-    options.append(response)
-    new_options = "|||".join(options)
+        # Convert the results into a flat list of strings
+        options = []
+        if past_responses and past_responses[0][0]:  # Check if past responses exist and are not None
+            options = past_responses[0][0].split("|||")
+        
+        options.append(response)
+        new_options = "|||".join(options)
 
-    # Update the user's response in the RDS database
-    cursor.execute(f"UPDATE users SET {var_name} = %s WHERE name = %s", (new_options, user_name))
-    
-    # Commit the transaction and close the connection
-    conn.commit()
-    conn.close()
+        # Update the user's response
+        cursor.execute(f"UPDATE users SET {var_name} = %s WHERE name = %s", (new_options, user_name))
+        conn.commit()
+        
+    except Exception as e:
+        conn.rollback()
+        raise e
+    finally:
+        conn.close()
 
 def record_event_in_database(user, start_time, end_time, event_type, var_name):
     """

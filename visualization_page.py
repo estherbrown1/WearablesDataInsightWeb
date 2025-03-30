@@ -298,8 +298,25 @@ def diff_plot_util(selected_var_dfname):
                                    split_comparison_plots=st.session_state.split_comparison_plots)
             
         except Exception as e:
-            st.error(f"Error generating comparison plots: {str(e)}")
-            st.info("This may be due to insufficient data for the selected intervention and variable.")
+            error_message = str(e)
+            st.error(f"Error generating comparison plots: '{selected_var_dfname}'")
+            
+            # Provide more specific guidance based on common errors
+            if "instance_id" in error_message:
+                st.info("There may not be enough unique instances of this intervention/event to create comparison plots. At least 2 instances are needed.")
+            elif "NaN" in error_message or "null" in error_message.lower():
+                st.info("Some required data points may be missing for the selected time periods.")
+            else:
+                st.info("This may be due to insufficient data for the selected intervention and variable, or you may need to adjust the time window.")
+            
+            # Suggest next steps
+            st.success("Try the following: 1) Add more instances of this intervention/event, 2) Choose a different variable, or 3) Adjust the time window before/after.")
+            
+            # Show detailed error for debugging in an expandable section
+            with st.expander("Technical Details (for debugging)"):
+                st.code(error_message)
+                st.write("Stack Trace:")
+                st.exception(e)
 
 def visualization_page(annotation = False, diff_plot = False):
     st.title("Data Visualization")

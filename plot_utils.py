@@ -322,7 +322,7 @@ class ComparisonPlotsManager:
             instance_name = instance_df['instance_label'].iloc[0]
             instances_to_process = [instance_name] if self.split_comparison_plots else instance_df["instance_label"].unique()
             # Aggregate data for sleep reporting
-            sleep_df = instance_df.sort_values("mins").groupby("instance").aggregate({
+            sleep_df = instance_df.sort_values("mins").groupby("instance_label").aggregate({
                 "mins": "last", 
                 self.var: "last", 
                 "sleep_score": "last", 
@@ -468,6 +468,7 @@ class ComparisonPlotsManager:
         Creates and returns Altair chart layers for sleep information
         """
         shared_x_max = self.instances_df["mins"].max()
+        y_padding = 0.3 * (self.instances_df[self.var].max() - self.instances_df[self.var].min()) 
         
         # Generate moon images for each sleep score
         sleep_df = sleep_df.copy()  # Make a copy to avoid modifying the original
@@ -497,14 +498,43 @@ class ComparisonPlotsManager:
             lambda row: create_moon_sleep_indicator(row.get('sleep_score'), effect_color=effect_color), 
             axis=1
         )
-        
+
+        # Optionally replace y-values with evenly spaced values
+        if self.split_comparison_plots:
+            y_encoding = alt.Y(f"{self.var}:Q")
+        else:
+            # Sort but don't modify original DataFrame
+            sorted_df = sleep_df[[self.var]].copy()
+            sorted_df = sorted_df.sort_values(by=self.var).reset_index()
+
+            y_positions = []
+            prev_y = None
+            for _, row in sorted_df.iterrows():
+                orig_val = row[self.var]
+                if prev_y is None:
+                    y_positions.append(orig_val)
+                    prev_y = orig_val
+                else:
+                    new_y = max(orig_val, prev_y + y_padding)
+                    y_positions.append(new_y)
+                    prev_y = new_y
+
+            # Map these padded y-values back to original indices
+            index_to_spaced = dict(zip(sorted_df['index'], y_positions))
+            sleep_df = sleep_df.copy()  # preserve original
+            sleep_df['y_spaced'] = sleep_df.index.map(index_to_spaced)
+
+            y_encoding = alt.Y('y_spaced:Q', axis=alt.Axis(title='Instance (padded)'))
+
+        print(sleep_df)
+
         # Create a chart with the moon images
         moon_chart = alt.Chart(sleep_df).mark_image(
             width=80,
             height=100
         ).encode(
             x=alt.X("modified_x:Q"),
-            y=alt.Y(f"{self.var}:Q"),
+            y=y_encoding,
             url='moon_image:N',
             tooltip=[
                 alt.Tooltip("instance_label:N", title="Instance"),
