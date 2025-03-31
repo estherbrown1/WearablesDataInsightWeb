@@ -26,7 +26,7 @@ def main():
        'Compare Interventions',
        'Calendar Upload',
        'Download Data - Admin',
-       'Feature Extractions - Admin'
+       'Feature Extractions - Admin',
        'Upload Data - Admin',
        'Signup - Admin',
    ])

@@ -12,10 +12,10 @@ else:
 
 def get_rds_connection():
     return pymysql.connect(
-        host="apcomp297.chg8skogwghf.us-east-2.rds.amazonaws.com",  # Your RDS endpoint
-        user="yilinw",  # Your RDS username
-        password="wearable42",  # Your RDS password
-        database="wearable",  # Database name on RDS
+        host="researchwearables.ct0y6ck0s1w.us-east-2.rds.amazonaws.com",
+        user="wearables2",
+        password="wearables2",
+        database="researchwearables",
         port=3306
     )
 
