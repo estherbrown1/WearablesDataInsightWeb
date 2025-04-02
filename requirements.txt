@@ -9,4 +9,3 @@ pymysql
 pwlf
 scikit-learn
 matplotlib
-seaborn

@@ -25,10 +25,10 @@ def main():
        'Show Annotations',
        'Compare Interventions',
        'Calendar Upload',
-       'Download Data - Admin',
-       'Feature Extractions - Admin',
        'Upload Data - Admin',
+       'Download Data - Admin',
        'Signup - Admin',
+       'Feature Extractions - Admin'
    ])
 
 
