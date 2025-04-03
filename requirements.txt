@@ -10,3 +10,4 @@ pwlf
 scikit-learn
 matplotlib
 seaborn
+umap-learn

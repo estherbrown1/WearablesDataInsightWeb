@@ -526,8 +526,6 @@ class ComparisonPlotsManager:
 
             y_encoding = alt.Y('y_spaced:Q', axis=alt.Axis(title='Instance (padded)'))
 
-        print(sleep_df)
-
         # Create a chart with the moon images
         moon_chart = alt.Chart(sleep_df).mark_image(
             width=80,
