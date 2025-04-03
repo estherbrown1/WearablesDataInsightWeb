@@ -160,7 +160,7 @@ def add_annotations(table_name, start_date, end_date, start_hour, end_hour):
             """
         else:
             # Query the specified table for the logged-in user's data
-            query = f"SELECT * FROM {table_name} WHERE name = %s"
+            query = f"SELECT * FROM {table_name} WHERE username = %s"
             
         # Try to execute the query
         try:

@@ -11,13 +11,14 @@ else:
     LOCAL_OFFSET = -time.timezone * 1000  # Standard time offset
 
 def get_rds_connection():
-    return pymysql.connect(
-        host="apcomp297.chg8skogwghf.us-east-2.rds.amazonaws.com",  # Your RDS endpoint
-        user="yilinw",  # Your RDS username
-        password="wearable42",  # Your RDS password
-        database="wearable",  # Database name on RDS
-        port=3306
-    )
+   return pymysql.connect(
+       host="researchwearables.ct0y6yck0s1w.us-east-2.rds.amazonaws.com",  # Your RDS endpoint
+       user="wearables2",  # Your RDS username
+       password="wearables2",  # Your RDS password
+       database="researchwearables",  # Database name on RDS
+       port=3306
+   )
+
 
 def get_df_from_query(query:str, conn:pymysql.connections.Connection) -> pd.DataFrame:
     """Helper function that returns the results of a SQL query as a dataframe."""
@@ -58,100 +59,65 @@ def check_user_credentials(username, password=None):
 
 def fetch_past_options(user_name, var_name="events"):
     """
-    Function that fetches past events/interventions for a user.
-    Tries both approaches - querying users table and dedicated tables.
-    
-    Parameters:
-        user_name (str): The username
-        var_name (str): The variable name ('events' or 'interventions')
-    
-    Returns:
-        list: A list of event/intervention names
+    Fetches distinct event/intervention names for a user from the
+    dedicated 'events' or 'interventions' tables.
+    Corrected to select the 'name' column and filter by 'username'.
     """
-    conn = get_rds_connection()
-    cursor = conn.cursor()
-    
+    conn = None  # Initialize conn
     try:
-        # APPROACH 1: Try getting from users table first (old method)
-        try:
-            cursor.execute(f"SELECT {var_name} FROM users WHERE name = %s", (user_name,))
-            past_responses = cursor.fetchall()
-            
-            # Convert the results into a flat list of strings
-            options = []
-            if past_responses and past_responses[0][0]:  # Check if past responses exist and are not None
-                options = past_responses[0][0].split("|||")  # Split on delimiter
-                if options and options[0]:  # Only return if we actually got data
-                    return options
-                    
-        except pymysql.err.OperationalError:
-            # If this fails (column doesn't exist), continue to approach 2
-            pass
-            
-        # APPROACH 2: Try getting from dedicated tables (new method)
-        # First check if the table exists
+        conn = get_rds_connection()
+        cursor = conn.cursor()
+
+        # Validate var_name is either 'events' or 'interventions'
+        if var_name not in ['events', 'interventions']:
+            print(f"Debug: Invalid table name requested: '{var_name}'")
+            return []
+
+        # Check if the specified table exists
         cursor.execute(f"""
             SELECT COUNT(*)
             FROM information_schema.tables
-            WHERE table_name = '{var_name}'
-        """)
-        
+            WHERE table_schema = DATABASE() AND table_name = %s
+        """, (var_name,))
+
         if cursor.fetchone()[0] == 0:
-            # Table doesn't exist yet
-            return []
-            
-        # If table exists, query the appropriate columns
-        try:
-            # Try with plural column name (table name)
-            cursor.execute(f"""
-                SELECT DISTINCT {var_name}
-                FROM {var_name}
-                WHERE name = %s
-            """, (user_name,))
-            
-            results = [row[0] for row in cursor.fetchall() if row[0] is not None]
-            
-            # If we got results, return them
-            if results:
-                return results
-                
-            # If no results, try with singular column name
-            cursor.execute(f"""
-                SELECT DISTINCT {var_name[:-1]}
-                FROM {var_name}
-                WHERE name = %s
-            """, (user_name,))
-            
-            return [row[0] for row in cursor.fetchall() if row[0] is not None]
-            
-        except pymysql.err.OperationalError as e:
-            # If "Unknown column", try the singular form
-            if "Unknown column" in str(e):
-                try:
-                    cursor.execute(f"""
-                        SELECT DISTINCT {var_name[:-1]}
-                        FROM {var_name}
-                        WHERE name = %s
-                    """, (user_name,))
-                    
-                    return [row[0] for row in cursor.fetchall() if row[0] is not None]
-                except Exception:
-                    # If that fails too, return empty list
-                    return []
-            else:
-                # For any other error, return empty list
-                return []
-                
+            print(f"Debug: Table '{var_name}' does not exist.")
+            return []  # Table doesn't exist
+
+        # Check if the 'username' and 'name' columns exist in the table
+        cursor.execute(f"SHOW COLUMNS FROM {var_name}")
+        columns = [col[0] for col in cursor.fetchall()]
+        if 'username' not in columns or 'name' not in columns:
+             print(f"Debug: Table '{var_name}' missing required 'username' or 'name' column.")
+             return [] # Table missing required columns
+
+        # --- CORRECTED QUERY ---
+        # Select the distinct 'name' values for the specified 'username'
+        query = f"""
+            SELECT DISTINCT name
+            FROM {var_name}
+            WHERE username = %s
+        """
+        cursor.execute(query, (user_name,))
+        # --- END CORRECTED QUERY ---
+
+        # Fetch results and filter out None or empty values
+        options = [row[0] for row in cursor.fetchall() if row[0] is not None and str(row[0]).strip() != '']
+        print(f"Debug: Found options for {var_name} for user '{user_name}': {options}")
+        return options
+
     except Exception as e:
-        # Log error but don't crash
-        print(f"Error fetching past options: {str(e)}")
-        return []
-        
+        # Log the error for debugging
+        print(f"Error in fetch_past_options for table '{var_name}', user '{user_name}': {str(e)}")
+        # Consider adding traceback here if needed:
+        # import traceback
+        # print(traceback.format_exc())
+        return [] # Return empty list on error
+
     finally:
-        conn.close()
-    
-    # If all approaches fail, return empty list
-    return []
+        if conn:
+            conn.close()
+
 
 def save_other_response(user_name, response, var_name="events"):
     """Modified to add missing columns if needed"""
@@ -190,45 +156,64 @@ def save_other_response(user_name, response, var_name="events"):
     finally:
         conn.close()
 
-def record_event_in_database(user, start_time, end_time, event_type, var_name):
+def record_event_in_database(user, start_time, end_time, event_name, var_name,
+                             category=None, notes=None, impact_feedback=None, event_type=None):
     """
-    Records an event (intervention/activity) in the database.
-    
+    Records an event or intervention in the database.
+
     Args:
         user (str): Username
-        start_time (datetime): Start time of the event
-        end_time (datetime): End time of the event
-        event_type (str): Type of event/intervention
-        var_name (str): Name of the table ('interventions' or other)
+        start_time (int): Start time in milliseconds
+        end_time (int): End time in milliseconds
+        event_name (str): Name of the event
+        var_name (str): Table name ('events' or 'interventions')
+        category (str): Category label ('Event' or 'Intervention')
+        notes (str): Optional user notes
+        impact_feedback (str): Optional user feedback
+        event_type (str): Source of annotation (e.g., 'manual', 'calendar', etc.)
     """
     conn = get_rds_connection()
     cursor = conn.cursor()
 
     try:
-        # First check if the table exists
+        # Ensure table exists with the full schema
         cursor.execute(f"""
             CREATE TABLE IF NOT EXISTS {var_name} (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 name VARCHAR(255),
-                start_time DATETIME,
-                end_time DATETIME,
-                {var_name} VARCHAR(255)
+                start_time BIGINT,
+                end_time BIGINT,
+                {var_name} TEXT,
+                category VARCHAR(255),
+                notes TEXT,
+                impact_feedback TEXT,
+                username VARCHAR(255),
+                event_type VARCHAR(255)
             )
         """)
         conn.commit()
 
-        # Insert the event details into the specified table
-        cursor.execute(f'''
-            INSERT INTO {var_name} (name, start_time, end_time, {var_name})
-            VALUES (%s, %s, %s, %s)
-        ''', (user, start_time, end_time, event_type))
-
+        # Insert record
+        cursor.execute(f"""
+            INSERT INTO {var_name} (
+                name, start_time, end_time, {var_name},
+                category, notes, impact_feedback, username, event_type
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (
+            event_name, start_time, end_time, event_name,
+            category, notes, impact_feedback, user, event_type
+        ))
         conn.commit()
+
+        print(f"✅ Successfully inserted: {event_name} ({start_time} → {end_time}) into {var_name}")
     except Exception as e:
-        print(f"Error recording event: {e}")
+        print(f"❌ Error recording {event_name}: {e}")
         conn.rollback()
     finally:
         conn.close()
+
+
+
 
 # Add a function to create or update the users table
 def ensure_users_table():
@@ -459,11 +444,24 @@ def get_time(row, instance_start, instance_end, start_time):
     else:
         return max(row["start_time"] + LOCAL_OFFSET, instance_end)
 
-def get_instances(user:str, instance_type:str, instance:str, mins_before:int, mins_after:int, var:str, var_dict:dict) -> tuple[pd.DataFrame, pd.DataFrame]:
+def get_instances(user: str, instance_type: str, instance: str, mins_before: int, mins_after: int, var: str, var_dict: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
-    Function that selects multiple instances of the same intervention, returns a dataframe of all instances.
+    Function that selects multiple instances of the same intervention (or event)
+    and returns a dataframe of all instances along with an aggregated dataframe.
+    
+    Parameters:
+        user (str): The username.
+        instance_type (str): Either 'events' or 'interventions'.
+        instance (str): The specific event/intervention title.
+        mins_before (int): Minutes before the event/intervention to include.
+        mins_after (int): Minutes after the event/intervention to include.
+        var (str): The variable key (e.g., 'stress').
+        var_dict (dict): Mapping from display names to database column names.
+    
+    Returns:
+        tuple: (instances_df, aggregate_df). Even if only one instance is found, the data are returned.
     """
-    # Convert minutes to ms
+    # Convert minutes to milliseconds
     ms_before, ms_after = mins_before * 60 * 1000, mins_after * 60 * 1000
 
     # Connect to the RDS database
@@ -476,116 +474,120 @@ def get_instances(user:str, instance_type:str, instance:str, mins_before:int, mi
         return empty_df, None
 
     try:
-        # Query the interventions table to get times for the given user and intervention
+        # --- UPDATED QUERY ---
+        # Filter by username and by the event/intervention title stored in the 'name' column.
         cursor.execute(f"""
             SELECT start_time, end_time
             FROM {instance_type}
-            WHERE name = %s
-            AND {instance_type} = %s
+            WHERE username = %s
+            AND name = %s
         """, (user, instance))
-        time_tuples = cursor.fetchall()  # List of tuples [(start_time_1,end_time_1), ...] (in ms)
+        time_tuples = cursor.fetchall()  # List of tuples [(start_time_1, end_time_1), ...] in ms
 
-        # If no results, try with the column name 'intervention' / 'event'
+        # Fallback: try using the singular column name if needed.
         if not time_tuples:
             cursor.execute(f"""
                 SELECT start_time, end_time
                 FROM {instance_type}
-                WHERE name = %s
+                WHERE username = %s
                 AND {instance_type[:-1]} = %s
             """, (user, instance))
             time_tuples = cursor.fetchall()
 
         if not time_tuples:
             empty_df = pd.DataFrame()
-            empty_df.attrs['error_message'] = f"No data available for {instance}. Please remember to tag the events/interventions you want to compare."
+            empty_df.attrs['error_message'] = f"No data available for {instance}. Please tag the events/interventions you want to compare."
             return empty_df, None
 
-        # Initialize dataframe of instances
+        # Initialize a DataFrame to hold all instance data
         instances_df = pd.DataFrame(columns=["intervention_name", "event_name", "calendar_name"])
 
         for i, (init_instance_start, init_instance_end) in enumerate(time_tuples):
+            # Adjust instance times using the local offset
             instance_start = init_instance_start + LOCAL_OFFSET
             instance_end = init_instance_end + LOCAL_OFFSET
-            start_time, end_time = instance_start - ms_before, instance_end + ms_after
+            start_window = instance_start - ms_before
+            end_window = instance_end + ms_after
 
             try:
                 var_query = f"""
                     SELECT {var_dict[var]}, unix_timestamp_cleaned, timestamp_cleaned
                     FROM {user}_{var}
-                    WHERE unix_timestamp_cleaned BETWEEN {start_time} AND {end_time}
+                    WHERE unix_timestamp_cleaned BETWEEN {start_window} AND {end_window}
                 """
-
-                # Create a dataframe with the selected data
+                # Create a DataFrame with the selected variable data
                 var_df = get_df_from_query(var_query, conn)
-                
                 if var_df.empty:
                     continue
-                    
-                var_df["timestamp_cleaned"] = pd.to_datetime(var_df["timestamp_cleaned"])
 
-                # Ensure dtypes are correct
+                var_df["timestamp_cleaned"] = pd.to_datetime(var_df["timestamp_cleaned"])
                 var_df["unix_timestamp_cleaned"] = var_df["unix_timestamp_cleaned"].astype("int64")
                 var_df[var] = var_df[var_dict[var]].astype("float64")
                 var_df = var_df.set_index("unix_timestamp_cleaned")
 
-                # Get interventions
+                # Merge in interventions data if instance_type is not 'interventions'
                 if instance_type != "interventions":
                     try:
                         intervention_query = f"""
                             SELECT start_time, end_time, interventions
                             FROM interventions
-                            WHERE name = "{user}" 
-                            AND (start_time BETWEEN {start_time-LOCAL_OFFSET} AND {end_time-LOCAL_OFFSET}
-                            OR end_time BETWEEN {start_time-LOCAL_OFFSET} AND {end_time-LOCAL_OFFSET}
-                            OR (start_time <= {start_time-LOCAL_OFFSET} AND end_time >= {end_time-LOCAL_OFFSET}))
+                            WHERE username = %s
+                            AND (
+                                start_time BETWEEN {start_window - LOCAL_OFFSET} AND {end_window - LOCAL_OFFSET}
+                                OR end_time BETWEEN {start_window - LOCAL_OFFSET} AND {end_window - LOCAL_OFFSET}
+                                OR (start_time <= {start_window - LOCAL_OFFSET} AND end_time >= {end_window - LOCAL_OFFSET})
+                            )
                         """
+                        cursor.execute(intervention_query, (user,))
                         intervention_df = get_df_from_query(intervention_query, conn)
                         if intervention_df.shape[0] > 0:
-                            intervention_df["unix_timestamp_cleaned"] = intervention_df.apply(get_time, axis=1, args=(instance_start, instance_end, start_time))
+                            intervention_df["unix_timestamp_cleaned"] = intervention_df.apply(get_time, axis=1, args=(instance_start, instance_end, start_window))
                             intervention_df = intervention_df.set_index("unix_timestamp_cleaned")
-                            intervention_df = intervention_df.rename({"interventions":"intervention_name", 
-                                                                    "start_time":"intervention_start", 
-                                                                    "end_time":"intervention_end"}, axis=1)
-                            var_df = var_df.merge(intervention_df[["intervention_name","intervention_start","intervention_end"]], 
-                                                left_index=True, right_index=True, how="outer")
+                            intervention_df = intervention_df.rename({
+                                "interventions": "intervention_name", 
+                                "start_time": "intervention_start", 
+                                "end_time": "intervention_end"
+                            }, axis=1)
+                            var_df = var_df.merge(intervention_df[["intervention_name", "intervention_start", "intervention_end"]], 
+                                                   left_index=True, right_index=True, how="outer")
                     except Exception:
-                        # Continue without intervention data
                         pass
 
-                # Get events
+                # Merge in events data if instance_type is not 'events'
                 if instance_type != "events":
                     try:
                         event_query = f"""
                             SELECT start_time, end_time, events
                             FROM events
-                            WHERE name = "{user}" 
-                            AND (start_time BETWEEN {start_time-LOCAL_OFFSET} AND {end_time-LOCAL_OFFSET}
-                            OR end_time BETWEEN {start_time-LOCAL_OFFSET} AND {end_time-LOCAL_OFFSET}
-                            OR (start_time <= {start_time-LOCAL_OFFSET} AND end_time >= {end_time-LOCAL_OFFSET}))
+                            WHERE username = %s
+                            AND (
+                                start_time BETWEEN {start_window - LOCAL_OFFSET} AND {end_window - LOCAL_OFFSET}
+                                OR end_time BETWEEN {start_window - LOCAL_OFFSET} AND {end_window - LOCAL_OFFSET}
+                                OR (start_time <= {start_window - LOCAL_OFFSET} AND end_time >= {end_window - LOCAL_OFFSET})
+                            )
                         """
+                        cursor.execute(event_query, (user,))
                         event_df = get_df_from_query(event_query, conn)
                         if event_df.shape[0] > 0:
-                            event_df["unix_timestamp_cleaned"] = event_df.apply(get_time, axis=1, args=(instance_start, instance_end, start_time))
+                            event_df["unix_timestamp_cleaned"] = event_df.apply(get_time, axis=1, args=(instance_start, instance_end, start_window))
                             event_df = event_df.set_index("unix_timestamp_cleaned")
-                            event_df = event_df.rename({"events":"event_name", 
-                                                        "start_time":"event_start", 
-                                                        "end_time":"event_end"}, axis=1)
-                            var_df = var_df.merge(event_df[["event_name","event_start","event_end"]], 
-                                                left_index=True, right_index=True, how="outer")
+                            event_df = event_df.rename({
+                                "events": "event_name", 
+                                "start_time": "event_start", 
+                                "end_time": "event_end"
+                            }, axis=1)
+                            var_df = var_df.merge(event_df[["event_name", "event_start", "event_end"]], 
+                                                   left_index=True, right_index=True, how="outer")
                     except Exception:
-                        # Continue without events data
                         pass
 
-                # Get calendar events
+                # Merge in calendar events data if available
                 if instance_type != "calendar events":
                     try:
-                        start_time_dt = pd.to_datetime(start_time, unit="ms").strftime("%Y-%m-%d %H:%M:%S")
-                        end_time_dt = pd.to_datetime(end_time, unit="ms").strftime("%Y-%m-%d %H:%M:%S")
+                        start_time_dt = pd.to_datetime(start_window, unit="ms").strftime("%Y-%m-%d %H:%M:%S")
+                        end_time_dt = pd.to_datetime(end_window, unit="ms").strftime("%Y-%m-%d %H:%M:%S")
                         calendar_query = f"""
-                            SELECT 
-                                start_time,
-                                end_time,
-                                summary
+                            SELECT start_time, end_time, summary
                             FROM {user}_calendar_events
                             WHERE start_time BETWEEN '{start_time_dt}' AND '{end_time_dt}'
                             OR end_time BETWEEN '{start_time_dt}' AND '{end_time_dt}'
@@ -593,20 +595,21 @@ def get_instances(user:str, instance_type:str, instance:str, mins_before:int, mi
                         """
                         calendar_df = get_df_from_query(calendar_query, conn)
                         if calendar_df.shape[0] > 0:
-                            calendar_df["start_time"] = pd.to_datetime(calendar_df["start_time"]).astype('int64') // 10**6  # Convert to ms
-                            calendar_df["end_time"] = pd.to_datetime(calendar_df["end_time"]).astype('int64') // 10**6  # Convert to ms
-                            calendar_df["unix_timestamp_cleaned"] = calendar_df.apply(get_time, axis=1, args=(instance_start, instance_end, start_time))
+                            calendar_df["start_time"] = pd.to_datetime(calendar_df["start_time"]).astype('int64') // 10**6
+                            calendar_df["end_time"] = pd.to_datetime(calendar_df["end_time"]).astype('int64') // 10**6
+                            calendar_df["unix_timestamp_cleaned"] = calendar_df.apply(get_time, axis=1, args=(instance_start, instance_end, start_window))
                             calendar_df = calendar_df.set_index("unix_timestamp_cleaned")
-                            calendar_df = calendar_df.rename({"summary":"calendar_name", 
-                                                        "start_time":"calendar_start", 
-                                                        "end_time":"calendar_end"}, axis=1)
-                            var_df = var_df.merge(calendar_df[["calendar_name","calendar_start","calendar_end"]],
-                                                left_index=True, right_index=True, how="outer")
+                            calendar_df = calendar_df.rename({
+                                "summary": "calendar_name", 
+                                "start_time": "calendar_start", 
+                                "end_time": "calendar_end"
+                            }, axis=1)
+                            var_df = var_df.merge(calendar_df[["calendar_name", "calendar_start", "calendar_end"]],
+                                                   left_index=True, right_index=True, how="outer")
                     except Exception:
-                        # Continue without calendar data
                         pass
 
-                # Fill in NA values if present
+                # Interpolate missing values for any related event columns if present
                 for col in ["intervention", "event", "calendar"]:
                     if f"{col}_name" in var_df.columns:
                         var_df = var_df.sort_index()
@@ -615,18 +618,18 @@ def get_instances(user:str, instance_type:str, instance:str, mins_before:int, mi
 
                 var_df = var_df.reset_index()
 
-                # Determine if row is before, during, or after instance
+                # Determine if each row is before, during, or after the instance
                 var_df["status"] = "during"
                 var_df.loc[var_df["unix_timestamp_cleaned"] < instance_start, "status"] = "before"
                 var_df.loc[var_df["unix_timestamp_cleaned"] > instance_end, "status"] = "after"
 
-                # Calculate timedelta before and after intervention
-                var_df["timedelta"] = pd.to_timedelta(var_df["unix_timestamp_cleaned"] - start_time, unit="ms")
+                # Calculate timedelta (in ms) from the start of the window
+                var_df["timedelta"] = pd.to_timedelta(var_df["unix_timestamp_cleaned"] - start_window, unit="ms")
 
-                # Include duration of intervention
+                # Include the duration of the instance
                 var_df["duration"] = pd.to_timedelta(instance_end - instance_start, unit="ms")
 
-                # Fetch sleep data for previous night
+                # Fetch sleep data
                 try:
                     date_str = pd.to_datetime(instance_start, unit="ms").strftime(r"%Y-%m-%d")
                     date_str = date_str[1:] if date_str[0] == "0" else date_str  # Strip leading 0
@@ -674,32 +677,38 @@ def get_instances(user:str, instance_type:str, instance:str, mins_before:int, mi
                     var_df["sleep_score"] = np.nan
                     var_df["sleep_label"] = "No Sleep Data"
 
-                # Concatenate with all other instances
-                instance_id = pd.to_datetime(instance_start, unit="ms") #.strftime("%a %d %b %Y, %I:%M%p")
+                # Tag this instance using its start time as identifier
+                instance_id = pd.to_datetime(instance_start, unit="ms")
                 var_df["instance"] = instance_id
+
+                # Concatenate this instance data with any previous instances
                 instances_df = pd.concat([instances_df, var_df], axis=0)
             
             except Exception as e:
+                # Skip this instance if an error occurs
                 continue
 
-        # If no instances with data were found, return empty DataFrame with error message
+        # If no instance data were found, return an empty DataFrame with an error message.
         if instances_df.empty:
             empty_df = pd.DataFrame()
-            empty_df.attrs['error_message'] = f"Found interventions for {instance}, but no matching {var} data in the time windows."
+            empty_df.attrs['error_message'] = f"Found instances for {instance}, but no matching {var} data in the time windows."
             return empty_df, None
 
-        # Calculate the time since start/end of longest intervention/event
+        # Ensure that the expected variable column exists.
+        if var not in instances_df.columns:
+            # If missing, create it with NaN values.
+            instances_df[var] = np.nan
+
+        # Calculate the adjusted time difference (in minutes) for plotting.
         max_duration = instances_df["duration"].max()
-        
         def update_timedelta(row):
             if row["duration"] < max_duration and row["status"] == "after":
                 return row["timedelta"] + max_duration - row["duration"]
             else:
                 return row["timedelta"]
-        
         instances_df["mins"] = instances_df.apply(update_timedelta, axis=1).dt.total_seconds() / 60
 
-        # Create aggregate dataframe with only valid data
+        # Create an aggregate DataFrame with only valid data.
         instances_df[var] = instances_df[var].astype("float64")
         grouped_df = instances_df[instances_df[var] > 0].groupby(["instance", "status"]).agg({var: ["mean", "std"]}).reset_index()
         agg_df = grouped_df.pivot(index="instance", columns="status", values=[(var, "mean"), (var, "std")])
@@ -713,6 +722,8 @@ def get_instances(user:str, instance_type:str, instance:str, mins_before:int, mi
     
     finally:
         conn.close()
+
+
 
 def get_mean_and_variance(user, intervention, var, X, var_dict, use="before"):
     """    This function selects data from the RDS database based on the user's name and the intervention.
@@ -841,12 +852,48 @@ def get_admin_name():
         return None
     finally:
         conn.close()
+        
+def print_table_structure(table_name="events"):
+    with get_rds_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(f"DESCRIBE {table_name}")
+            structure = cursor.fetchall()
+            header = ["Field", "Type", "Null", "Key", "Default", "Extra"]
+            print(f"--- Structure of {table_name} ---")
+            print(header)
+            for row in structure:
+                print(row)
+            print("\n")
+
+def print_annotations_for_username(username, table_name="events"):
+    with get_rds_connection() as conn:
+        with conn.cursor() as cursor:
+            query = f"SELECT * FROM {table_name} WHERE username = %s"
+            cursor.execute(query, (username,))
+            rows = cursor.fetchall()
+            if cursor.description:
+                columns = [desc[0] for desc in cursor.description]
+            else:
+                columns = []
+            print(f"--- Annotations for '{username}' ---")
+            print("Columns:", columns)
+            print("Total rows:", len(rows))
+            for row in rows:
+                print(row)
+            print("\n")
 
         
+# if __name__ == "__main__":
+#     var_dict = {
+#         "Stress Level" : "stress",
+#         "Heart Rate" : "daily_heart_rate",
+#     }
+#     df = fetch_data("Stress Level", var_dict, "zw")
+#     print(df)
 if __name__ == "__main__":
-    var_dict = {
-        "Stress Level" : "stress",
-        "Heart Rate" : "daily_heart_rate",
-    }
-    df = fetch_data("Stress Level", var_dict, "zw")
-    print(df)
+    # Print the structure of the events table
+    print_table_structure("events")
+    
+    # Compare the annotations for the two usernames:
+    print_annotations_for_username("g_study_data", "events")
+    print_annotations_for_username("e_study_c", "events")
