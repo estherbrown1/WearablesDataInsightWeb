@@ -1,7 +1,6 @@
 import datetime 
 import time
 import streamlit as st
-import streamlit_analytics
 import pandas as pd
 import altair as alt
 from sql_utils import *
@@ -43,7 +42,6 @@ DESC_TEXT = {
 }
 
 def questionaire(selected, var_name = "events"):
-    streamlit_analytics.start_tracking()
     with st.container():
         st.markdown("### Add New Entry")
         st.markdown("---")
@@ -142,13 +140,11 @@ def questionaire(selected, var_name = "events"):
         except Exception as e:
             st.error("⚠️ Please select a time range on the plot first")
             return
-    streamlit_analytics.stop_tracking()
 
 def add_annotations(table_name, start_date, end_date, start_hour, end_hour):
     """
     Function that plots events/interventions/calendar events in the specified timeframe.
     """
-    streamlit_analytics.start_tracking()
     conn = get_rds_connection()
 
     try:
@@ -236,10 +232,8 @@ def add_annotations(table_name, start_date, end_date, start_hour, end_hour):
     finally:
         # Always close the connection
         conn.close()
-    streamlit_analytics.stop_tracking()
 
 def diff_plot_util(selected_var_dfname):
-    streamlit_analytics.start_tracking()
     
     instance_type = st.selectbox("Please select a category:", ["Interventions", "Events"]).lower()
 
@@ -322,10 +316,8 @@ def diff_plot_util(selected_var_dfname):
                 st.code(error_message)
                 st.write("Stack Trace:")
                 st.exception(e)
-    streamlit_analytics.stop_tracking()
 
 def visualization_page(annotation = False, diff_plot = False):
-    streamlit_analytics.start_tracking()
 
     st.title("Data Visualization")
 
@@ -435,7 +427,6 @@ def visualization_page(annotation = False, diff_plot = False):
                     questionaire(selected, var_name="interventions")
             else:
                 st.info("Please select a time range by clicking and dragging on the plot")
-    streamlit_analytics.stop_tracking()
 
 if __name__ == '__main__':
     visualization_page()
