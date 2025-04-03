@@ -11,3 +11,4 @@ scikit-learn
 matplotlib
 seaborn
 umap-learn
+streamlit-analytics
