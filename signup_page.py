@@ -1,6 +1,9 @@
 import streamlit as st
+import streamlit_analytics
 from sql_utils import get_rds_connection
 import pymysql
+
+streamlit_analytics.start_tracking()
 
 def check_table_structure():
     """Check the structure of the users table and return column names"""

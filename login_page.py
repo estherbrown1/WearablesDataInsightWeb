@@ -1,8 +1,11 @@
 import streamlit as st
+import streamlit_analytics
 from data_utils import update_database
 from sql_utils import *
 from sql_utils import get_admin_name
 import time
+
+streamlit_analytics.start_tracking()
 
 # Authenticate user by checking against the RDS database
 def authenticate_user(name, password):
