@@ -1,6 +1,7 @@
 import datetime 
 import time
 import streamlit as st
+import streamlit_analytics
 import pandas as pd
 import altair as alt
 from sql_utils import *
@@ -319,6 +320,8 @@ def diff_plot_util(selected_var_dfname):
                 st.exception(e)
 
 def visualization_page(annotation = False, diff_plot = False):
+    streamlit_analytics.start_tracking()
+
     st.title("Data Visualization")
 
     if 'submit_selection' not in st.session_state:
@@ -427,6 +430,7 @@ def visualization_page(annotation = False, diff_plot = False):
                     questionaire(selected, var_name="interventions")
             else:
                 st.info("Please select a time range by clicking and dragging on the plot")
+    streamlit_analytics.stop_tracking()
 
 if __name__ == '__main__':
     visualization_page()
