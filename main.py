@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit_analytics
 from signup_page import signup_page
 from login_page import login_page
 from visualization_page import visualization_page
@@ -9,14 +10,9 @@ from sql_utils import get_admin_name
 from home import home_page
 from physiological_analysis import run_stepper_extraction 
 
-
-from analytics import inject_google_analytics, track_page_view
-
-
 def main():
-   # 1) Inject Google Analytics once
-   inject_google_analytics()
-  
+   streamlit_analytics.start_tracking()
+
    st.sidebar.title('Main Menu')
    page = st.sidebar.radio('Go to', [
        'Home',
@@ -31,12 +27,6 @@ def main():
        'Signup - Admin',
    ])
 
-
-   # 2) Track page view whenever page changes
-   track_page_view(page)
-
-
-   # The rest of the app
    st.session_state.logged_in = st.session_state.get('logged_in', False)
 
 
@@ -80,6 +70,8 @@ def main():
        download_user_data()
    elif page == 'Feature Extractions - Admin':
        run_stepper_extraction()  
+
+   streamlit_analytics.stop_tracking()
 
 
 if __name__ == '__main__':
