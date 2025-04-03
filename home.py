@@ -1,9 +1,11 @@
 import streamlit as st
+import streamlit_analytics
 
 def home_page():
     """
     Displays the welcome home page with information about the application.
     """
+    streamlit_analytics.start_tracking()
     # Apply custom styling for the text elements
     st.markdown("""
         <style>
@@ -98,3 +100,4 @@ def home_page():
             <p>Discover when interventions positively influence your body's responses.</p>
         </div>
         """, unsafe_allow_html=True)
+    streamlit_analytics.stop_tracking()
