@@ -10,8 +10,9 @@ from sql_utils import get_admin_name
 from home import home_page
 from physiological_analysis import run_stepper_extraction 
 
+streamlit_analytics.start_tracking()
+
 def main():
-   streamlit_analytics.start_tracking()
 
    st.sidebar.title('Main Menu')
    page = st.sidebar.radio('Go to', [
@@ -71,7 +72,7 @@ def main():
    elif page == 'Feature Extractions - Admin':
        run_stepper_extraction()  
 
-   streamlit_analytics.stop_tracking()
+streamlit_analytics.stop_tracking()
 
 
 if __name__ == '__main__':
