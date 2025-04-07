@@ -54,7 +54,7 @@ def home_page():
     """, unsafe_allow_html=True)
     
     # Title and subtitle with slightly reduced font sizes
-    st.markdown('<h1 class="big-text centered">test Transform Your Wearables Data Into Insights</h1>', unsafe_allow_html=True)
+    st.markdown('<h1 class="big-text centered">Transform Your Wearables Data Into Insights</h1>', unsafe_allow_html=True)
     st.markdown('<p class="sub-text centered">Understand patterns and optimize your well-being</p>', unsafe_allow_html=True)
     
     # Show three Garmin watch images with consistent spacing
