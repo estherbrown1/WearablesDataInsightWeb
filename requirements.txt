@@ -12,3 +12,4 @@ matplotlib
 seaborn
 umap-learn
 streamlit-analytics
+python-dotenv
