@@ -1,7 +1,5 @@
 import streamlit as st
 import streamlit_analytics
-import os
-from dotenv import load_dotenv
 from signup_page import signup_page
 from login_page import login_page
 from visualization_page import visualization_page
@@ -12,8 +10,7 @@ from sql_utils import get_admin_name
 from home import home_page
 from physiological_analysis import run_stepper_extraction
 
-load_dotenv()
-password = os.getenv("PASSWORD")
+password = st.secrets["password"]
 with streamlit_analytics.track(unsafe_password=password):
 
     def main():
