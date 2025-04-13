@@ -11,13 +11,13 @@ else:
     LOCAL_OFFSET = -time.timezone * 1000  # Standard time offset
 
 def get_rds_connection():
-   return pymysql.connect(
+    return pymysql.connect(
        host="researchwearables.ct0y6yck0s1w.us-east-2.rds.amazonaws.com",  # Your RDS endpoint
        user="wearables2",  # Your RDS username
        password="wearables2",  # Your RDS password
        database="researchwearables",  # Database name on RDS
-       port=3306
-   )
+        port=3306
+    )
 
 
 def get_df_from_query(query:str, conn:pymysql.connections.Connection) -> pd.DataFrame:
@@ -65,8 +65,8 @@ def fetch_past_options(user_name, var_name="events"):
     """
     conn = None  # Initialize conn
     try:
-        conn = get_rds_connection()
-        cursor = conn.cursor()
+    conn = get_rds_connection()
+    cursor = conn.cursor()
 
         # Validate var_name is either 'events' or 'interventions'
         if var_name not in ['events', 'interventions']:
@@ -104,7 +104,7 @@ def fetch_past_options(user_name, var_name="events"):
         # Fetch results and filter out None or empty values
         options = [row[0] for row in cursor.fetchall() if row[0] is not None and str(row[0]).strip() != '']
         print(f"Debug: Found options for {var_name} for user '{user_name}': {options}")
-        return options
+    return options
 
     except Exception as e:
         # Log the error for debugging
@@ -135,26 +135,26 @@ def save_other_response(user_name, response, var_name="events"):
             conn.commit()
         
         # Now we can safely fetch past responses
-        cursor.execute(f"SELECT {var_name} FROM users WHERE name = %s", (user_name,))
-        past_responses = cursor.fetchall()
+    cursor.execute(f"SELECT {var_name} FROM users WHERE name = %s", (user_name,))
+    past_responses = cursor.fetchall()
 
-        # Convert the results into a flat list of strings
-        options = []
-        if past_responses and past_responses[0][0]:  # Check if past responses exist and are not None
-            options = past_responses[0][0].split("|||")
-        
-        options.append(response)
-        new_options = "|||".join(options)
+    # Convert the results into a flat list of strings
+    options = []
+    if past_responses and past_responses[0][0]:  # Check if past responses exist and are not None
+        options = past_responses[0][0].split("|||")
+    
+    options.append(response)
+    new_options = "|||".join(options)
 
         # Update the user's response
-        cursor.execute(f"UPDATE users SET {var_name} = %s WHERE name = %s", (new_options, user_name))
+    cursor.execute(f"UPDATE users SET {var_name} = %s WHERE name = %s", (new_options, user_name))
         conn.commit()
         
     except Exception as e:
         conn.rollback()
         raise e
     finally:
-        conn.close()
+    conn.close()
 
 def record_event_in_database(user, start_time, end_time, event_name, var_name,
                              category=None, notes=None, impact_feedback=None, event_type=None):
@@ -203,14 +203,14 @@ def record_event_in_database(user, start_time, end_time, event_name, var_name,
             event_name, start_time, end_time, event_name,
             category, notes, impact_feedback, user, event_type
         ))
-        conn.commit()
+    conn.commit()
 
         print(f"✅ Successfully inserted: {event_name} ({start_time} → {end_time}) into {var_name}")
     except Exception as e:
         print(f"❌ Error recording {event_name}: {e}")
         conn.rollback()
     finally:
-        conn.close()
+    conn.close()
 
 
 
@@ -587,8 +587,8 @@ def get_instances(user: str, instance_type: str, instance: str, mins_before: int
                         start_time_dt = pd.to_datetime(start_window, unit="ms").strftime("%Y-%m-%d %H:%M:%S")
                         end_time_dt = pd.to_datetime(end_window, unit="ms").strftime("%Y-%m-%d %H:%M:%S")
                         calendar_query = f"""
-                            SELECT start_time, end_time, summary
-                            FROM {user}_calendar_events
+                    SELECT start_time, end_time, summary
+                    FROM {user}_calendar_events
                             WHERE start_time BETWEEN '{start_time_dt}' AND '{end_time_dt}'
                             OR end_time BETWEEN '{start_time_dt}' AND '{end_time_dt}'
                             OR (start_time <= '{start_time_dt}' AND end_time >= '{end_time_dt}')
@@ -631,51 +631,81 @@ def get_instances(user: str, instance_type: str, instance: str, mins_before: int
 
                 # Fetch sleep data
                 try:
-                    date_str = pd.to_datetime(instance_start, unit="ms").strftime(r"%Y-%m-%d")
-                    date_str = date_str[1:] if date_str[0] == "0" else date_str  # Strip leading 0
+                    today_dt = pd.to_datetime(instance_start, unit="ms")
+                    today_str = today_dt.strftime(r"%Y-%m-%d")
+                    tmr_dt = today_dt + pd.Timedelta(days=1)
+                    tmr_str = tmr_dt.strftime(r"%Y-%m-%d")
                     
-                    cursor.execute(f"""
+                    sleep_query = f"""
                         SELECT durationInMs, overallSleepScore, overallSleepQualifier, calendarDate
                         FROM {user}_sleep_summary
-                        WHERE calendarDate = '{date_str}'
-                    """)
-                    sleep_result = cursor.fetchone()
+                        WHERE calendarDate = '{today_str}' OR calendarDate = '{tmr_str}'
+                    """
+                    sleep_df = get_df_from_query(sleep_query, conn)
                     
-                    if sleep_result:
-                        sleep_duration_ms, sleep_score, sleep_label, _ = sleep_result
-                        var_df["sleep_hours"] = pd.to_timedelta(sleep_duration_ms, unit="ms").total_seconds() / 60 / 60
-                        var_df["sleep_score"] = sleep_score
-                        var_df["sleep_label"] = sleep_label.title().strip() + " Sleep"
-                    else:
+                    if sleep_df.empty:
                         # Try alternative sleep table
-                        cursor.execute(f"""
-                            SELECT score
-                            FROM {user}_sleep
-                            WHERE DATE(start_time) = '{date_str}'
-                            ORDER BY start_time DESC
-                            LIMIT 1
+                cursor.execute(f"""
+                    SELECT score
+                    FROM {user}_sleep
+                            WHERE DATE(start_time) = '{today_str}'
+                    ORDER BY start_time DESC
+                    LIMIT 1
                         """)
                         alt_sleep_result = cursor.fetchone()
                         
                         if alt_sleep_result:
                             sleep_score = alt_sleep_result[0]
                             var_df["sleep_score"] = sleep_score
-                            
-                            # Add sleep label based on score
-                            if sleep_score >= 80:
-                                var_df["sleep_label"] = "Good Sleep"
-                            elif sleep_score >= 60:
-                                var_df["sleep_label"] = "Fair Sleep"
+                    
+                    # Add sleep label based on score
+                            if sleep_score >= 90:
+                                var_df["sleep_label"] = "Excellent"
+                            elif sleep_score >= 80:
+                                var_df["sleep_label"] = "Good"
+                    elif sleep_score >= 60:
+                                var_df["sleep_label"] = "Fair"
                             else:
-                                var_df["sleep_label"] = "Poor Sleep"
+                                var_df["sleep_label"] = "Poor"
                         else:
-                            var_df["sleep_hours"] = np.nan
-                            var_df["sleep_score"] = np.nan
-                            var_df["sleep_label"] = "No Sleep Data"
+                            for day in ["today","tmr"]:
+                                var_df[f"{day}_sleep_hours"] = None
+                                var_df[f"{day}_sleep_score"] = None
+                                var_df[f"{day}_sleep_label"] = "No Sleep Data"
+                    else:
+                        # Sleep data for last night
+                        today_df = sleep_df[sleep_df["calendarDate"] == today_str]
+                        tmr_df = sleep_df[sleep_df["calendarDate"] == tmr_str]
+                        for df, day in zip([today_df, tmr_df],["today", "tmr"]):
+                            if len(df) == 1:
+                                sleep_dur, sleep_score, sleep_label = df.iloc[0][["durationInMs", "overallSleepScore", "overallSleepQualifier"]]
+                else:
+                                sleep_dur, sleep_score, sleep_label = None, None, None
+                            var_df[f"{day}_sleep_hours"] = pd.to_timedelta(sleep_dur, unit="ms").total_seconds() / 60 / 60
+                            var_df[f"{day}_sleep_score"] = sleep_score
+                            var_df[f"{day}_sleep_label"] = f"{sleep_label.title().strip()} Sleep"
+                        
                 except Exception:
-                    var_df["sleep_hours"] = np.nan
-                    var_df["sleep_score"] = np.nan
-                    var_df["sleep_label"] = "No Sleep Data"
+                    for day in ["today","tmr"]:
+                        var_df[f"{day}_sleep_hours"] = None
+                        var_df[f"{day}_sleep_score"] = None
+                        var_df[f"{day}_sleep_label"] = "No Sleep Data"
+
+                # Fetch steps data
+                try:
+
+                    yday_dt = today_dt - pd.Timedelta(days=1)
+                    yday_str = yday_dt.strftime(r"%Y-%m-%d")
+                    steps_query = f"""
+                        SELECT steps
+                        FROM {user}_daily_summary
+                        where calendarDate = '{yday_str}'
+                        LIMIT 1
+                    """
+                    yday_steps = get_df_from_query(steps_query, conn).iloc[0,0]
+                    var_df["steps_yesterday"] = f"{yday_steps:,d} Steps"
+                except Exception:
+                    var_df["steps_yesterday"] = ""
 
                 # Tag this instance using its start time as identifier
                 instance_id = pd.to_datetime(instance_start, unit="ms")
@@ -697,7 +727,7 @@ def get_instances(user: str, instance_type: str, instance: str, mins_before: int
         # Ensure that the expected variable column exists.
         if var not in instances_df.columns:
             # If missing, create it with NaN values.
-            instances_df[var] = np.nan
+            instances_df[var] = None
 
         # Calculate the adjusted time difference (in minutes) for plotting.
         max_duration = instances_df["duration"].max()
@@ -712,7 +742,7 @@ def get_instances(user: str, instance_type: str, instance: str, mins_before: int
         instances_df[var] = instances_df[var].astype("float64")
         grouped_df = instances_df[instances_df[var] > 0].groupby(["instance", "status"]).agg({var: ["mean", "std"]}).reset_index()
         agg_df = grouped_df.pivot(index="instance", columns="status", values=[(var, "mean"), (var, "std")])
-
+        
         return instances_df, agg_df
     
     except Exception as e:

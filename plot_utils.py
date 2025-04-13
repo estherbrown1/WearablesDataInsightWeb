@@ -10,9 +10,37 @@ from matplotlib.patches import Circle, PathPatch
 from matplotlib.path import Path
 import io
 import base64
+import uuid
 
+def df_to_altair(df:pd.DataFrame):
+
+    # df = df.copy()  # work on a copy to avoid modifying the original DataFrame
+
+    df_records = df.to_dict(orient="records")
+
+    cleaned_records = []
+
+    for record in df_records:
+        new_record = {}
+        for key, value in record.items():
+            if isinstance(value, pd.Timestamp):
+                new_value = value.isoformat() if pd.notnull(value) else None
+            elif isinstance(value, pd.Timedelta):
+                new_value = value.total_seconds() / 60
+            elif pd.isnull(value):
+                new_value = None
+            else:
+                new_value = value
+            new_record[key] = new_value
+        cleaned_records.append(new_record)
+
+    # Assign unique key
+    unique_key = str(uuid.uuid4())
     
-def create_moon_sleep_indicator(sleep_score, size=100, effect_color=None):
+    # Return the data as an Altair inline data object
+    return alt.Data(name=unique_key, values=cleaned_records)
+
+def create_moon_sleep_indicator(sleep_score, sleep_timing, size=100, effect_color=None):
     """
     Creates a horizontally filled circle (moon shape) based on a sleep_score from 0..100.
     
@@ -121,9 +149,13 @@ def create_moon_sleep_indicator(sleep_score, size=100, effect_color=None):
         circle_path = Path.circle((0, 0), moon_radius)
         fill_rect.set_clip_path(PathPatch(circle_path, transform=ax.transData))
 
+        # Description
+        ax.text(0, -1, f"{sleep_timing} Night:", ha="center", va="center",
+                fontsize=14, color=fill_color, fontweight="bold")
+
         # Label
-        ax.text(0, -1.3, label, ha='center', va='center',
-                fontsize=14, color=fill_color, fontweight='bold')
+        ax.text(0, -1.3, label, ha="center", va="center",
+                fontsize=14, color=fill_color, fontweight="bold")
 
     # Convert figure to base64
     buf = io.BytesIO()
@@ -183,6 +215,7 @@ class ComparisonPlotsManager:
         ).resolve_scale(
             color=resolve,
             stroke=resolve,
+            theta=resolve
         )
 
         if prop_kwargs is not None:
@@ -269,7 +302,9 @@ class ComparisonPlotsManager:
 
         # Create custom x axis and y scale
         x_axis = self.create_trajectory_x_axis()
-        y_scale = alt.Scale(domain=[var_min, var_max], padding=0.15)
+        y_span = var_max - var_min
+        y_padding = y_span * 0.1
+        y_scale = alt.Scale(domain=[var_min-y_padding, var_max+y_padding])
 
         # Add labels
         labels_layers = self.create_trajectory_annotations()
@@ -322,17 +357,20 @@ class ComparisonPlotsManager:
             instance_name = instance_df['instance_label'].iloc[0]
             instances_to_process = [instance_name] if self.split_comparison_plots else instance_df["instance_label"].unique()
             # Aggregate data for sleep reporting
-            sleep_df = instance_df.sort_values("mins").groupby("instance_label").aggregate({
-                "mins": "last", 
-                self.var: "last", 
-                "sleep_score": "last", 
-                "sleep_label": "last",
-                "effect": "first"  # Include effect in aggregation
-            }).reset_index()
-            sleep_df["dummy_outline"] = 100
+            sleep_steps_df = instance_df.sort_values("mins").groupby("instance_label").aggregate(
+                mins_last=("mins", "last"),
+                var_first=(self.var, "first"),
+                var_last=(self.var, "last"),
+                steps_yesterday=("steps_yesterday", "last"),
+                today_sleep_score=("today_sleep_score", "last"),
+                today_sleep_label=("today_sleep_label", "last"),
+                tmr_sleep_score=("tmr_sleep_score", "last"),
+                tmr_sleep_label=("tmr_sleep_label", "last"),
+                effect_first=("effect", "first"),
+            ).reset_index() 
             # Plot the various components of the plot
             instance_line_layers = self.create_trajectory_lines(instance_df, effect, effect_color_scale[effect], x_axis, y_scale)
-            instance_sleep_layers = self.create_trajectory_sleep_info(sleep_df)
+            instance_sleep_step_layer = self.create_trajectory_sleep_steps(sleep_steps_df, effect_color_scale[effect], y_span)
             instance_regression_layers = self.create_trajectory_regression(instance_df, instances_to_process, x_axis, y_scale, effect_color_scale[effect])
             instance_event_layer = self.create_trajectory_events(instance_df)
             
@@ -361,7 +399,10 @@ class ComparisonPlotsManager:
                     subplot_props["title"] = alt.Title("") # Remove instance name from title
             
             # Create the subplot
-            subplot = self.combine_layers([*labels_layers, *instance_line_layers, *instance_sleep_layers, *instance_regression_layers, instance_event_layer], prop_kwargs=subplot_props)
+            subplot = self.combine_layers(
+                [*labels_layers, *instance_line_layers, instance_sleep_step_layer, instance_regression_layers, instance_event_layer],
+                prop_kwargs=subplot_props
+            )
             all_subplots.append(subplot)
 
         # Create the final vertical concatenation of plots
@@ -407,7 +448,8 @@ class ComparisonPlotsManager:
                   self.mins_before + (self.max_duration / 2), 
                   self.mins_before + self.max_duration + (self.mins_after / 2)]
         })
-        section_labels = alt.Chart(labels_df).mark_text(
+        data = df_to_altair(labels_df)
+        section_labels = alt.Chart(data).mark_text(
             align="center",
             baseline="bottom",
             fontSize=14,
@@ -419,9 +461,10 @@ class ComparisonPlotsManager:
             tooltip=alt.value(None),
         )
         # Plot the start and end of the intervention/event
-        vbar_marks = alt.Chart(pd.DataFrame({
+        data = df_to_altair(pd.DataFrame({
             "x": [self.mins_before, self.mins_before + self.max_duration]
-        })).mark_rule(color="red").encode(x="x:Q",tooltip=alt.value(None))
+        }))
+        vbar_marks = alt.Chart(data).mark_rule(color="red").encode(x="x:Q",tooltip=alt.value(None))
         return [section_labels, vbar_marks]
     
     def create_trajectory_lines(self, df:pd.DataFrame, effect:str, effect_scale:alt.Scale, 
@@ -429,11 +472,9 @@ class ComparisonPlotsManager:
         """
         Creates and returns Altair chart layers for lines representing trajectories of instances.
         """
-        lines_before_after = alt.Chart(df[
-            (df["status"].isin(["before", "after"])) & 
-            df["event_name"].isna() & 
-            df["calendar_name"].isna()
-        ]).mark_line(
+        data = df_to_altair(df)
+
+        lines_before_after = alt.Chart(data).mark_line(
             opacity=0.85
         ).encode(
             x=x_axis,
@@ -447,112 +488,79 @@ class ComparisonPlotsManager:
                 alt.Tooltip(f"{self.var}:Q", title=self.var_label.title()),
                 alt.Tooltip("instance_label:N", title="Instance")
             ]
+        ).transform_filter(
+            (
+                (alt.datum.status == "before") | 
+                (alt.datum.status == "after")
+            ) & 
+            (alt.datum.event_name == None) & 
+            (alt.datum.calendar_name == None)
         )
-        lines_during = alt.Chart(df[df["status"] == "during"]).mark_line(
-                opacity=0.85
-            ).encode(
-                x=x_axis,
-                y=alt.Y(f"{self.var}:Q", scale=y_scale),
-                color=alt.Color('instance_label:N', scale=effect_scale, legend=None),
-                detail=alt.Detail('instance_label:N'),
-                tooltip=[
-                    alt.Tooltip("isoDate:T", title="Time", format=r"%c"),
-                    alt.Tooltip(f"{self.var}:Q", title=self.var_label.title()),
-                    alt.Tooltip("instance_label:N", title="Instance"),
-                ]
-            )
+        lines_during = alt.Chart(data).mark_line(
+            opacity=0.85
+        ).encode(
+            x=x_axis,
+            y=alt.Y(f"{self.var}:Q", scale=y_scale),
+            color=alt.Color('instance_label:N', scale=effect_scale, legend=None),
+            detail=alt.Detail('instance_label:N'),
+            tooltip=[
+                alt.Tooltip("isoDate:T", title="Time", format=r"%c"),
+                alt.Tooltip(f"{self.var}:Q", title=self.var_label.title()),
+                alt.Tooltip("instance_label:N", title="Instance"),
+            ]
+        ).transform_filter(
+            alt.datum.status == "during"
+        )
         return lines_before_after, lines_during
     
-    def create_trajectory_sleep_info(self, sleep_df:pd.DataFrame, inner_radius=6, outer_radius=12, x_padding:float=1.065) -> tuple[alt.Chart, alt.Chart, alt.Chart]:
+    def create_trajectory_sleep_steps(self, df:pd.DataFrame, effect_scale:alt.Scale, y_span:float, inner_radius=6, outer_radius=12, x_scale:float=0.05, y_scale:float=0.1) -> alt.Chart:
         """
-        Creates and returns Altair chart layers for sleep information
+        Creates a separate sleep and steps plot
         """
-        shared_x_max = self.instances_df["mins"].max()
-        y_padding = 0.3 * (self.instances_df[self.var].max() - self.instances_df[self.var].min()) 
-        
-        # Generate moon images for each sleep score
-        sleep_df = sleep_df.copy()  # Make a copy to avoid modifying the original
-        
-        # Determine the effect color scheme
-        effect = sleep_df['effect'].iloc[0] if not sleep_df.empty and 'effect' in sleep_df.columns else None
-        effect_color = 'blues' if effect == 'Positive' else 'reds' if effect == 'Negative' else 'purples'
-        
-        # Ensure sleep_label is properly set and replace null sleep scores with "No Sleep Data" text
-        for idx, row in sleep_df.iterrows():
-            score = row.get('sleep_score')
-            if score is None or pd.isna(score):
-                sleep_df.at[idx, 'sleep_label'] = "No Sleep Data"
-                sleep_df.at[idx, 'sleep_score_display'] = "No Sleep Data"
-            elif score >= 80:
-                sleep_df.at[idx, 'sleep_label'] = "Good Sleep"
-                sleep_df.at[idx, 'sleep_score_display'] = f"{int(score)}"
-            elif score >= 60:
-                sleep_df.at[idx, 'sleep_label'] = "Fair Sleep"
-                sleep_df.at[idx, 'sleep_score_display'] = f"{int(score)}"
-            else:
-                sleep_df.at[idx, 'sleep_label'] = "Poor Sleep"
-                sleep_df.at[idx, 'sleep_score_display'] = f"{int(score)}"
-        
-        # Add moon images with the effect color
-        sleep_df['moon_image'] = sleep_df.apply(
-            lambda row: create_moon_sleep_indicator(row.get('sleep_score'), effect_color=effect_color), 
-            axis=1
-        )
-
-        # Optionally replace y-values with evenly spaced values
-        if self.split_comparison_plots:
-            y_encoding = alt.Y(f"{self.var}:Q")
-        else:
-            # Sort but don't modify original DataFrame
-            sorted_df = sleep_df[[self.var]].copy()
-            sorted_df = sorted_df.sort_values(by=self.var).reset_index()
-
-            y_positions = []
-            prev_y = None
-            for _, row in sorted_df.iterrows():
-                orig_val = row[self.var]
-                if prev_y is None:
-                    y_positions.append(orig_val)
-                    prev_y = orig_val
-                else:
-                    new_y = max(orig_val, prev_y + y_padding)
-                    y_positions.append(new_y)
-                    prev_y = new_y
-
-            # Map these padded y-values back to original indices
-            index_to_spaced = dict(zip(sorted_df['index'], y_positions))
-            sleep_df = sleep_df.copy()  # preserve original
-            sleep_df['y_spaced'] = sleep_df.index.map(index_to_spaced)
-
-            y_encoding = alt.Y('y_spaced:Q', axis=alt.Axis(title='Instance (padded)'))
-
-        # Create a chart with the moon images
-        moon_chart = alt.Chart(sleep_df).mark_image(
+        shared_x_max, shared_x_min = self.instances_df["mins"].max(), self.instances_df["mins"].min()
+        x_offset = (shared_x_max - shared_x_min) * x_scale
+        # Create padding variables
+        y_offset = y_span * y_scale
+        df["x1"] = -x_offset
+        df["x2"] = shared_x_max+x_offset
+        df["y1"] = df["var_first"]
+        df["y2"] = df["var_first"] + y_offset
+        df["today_moon_image"] = df.apply(lambda row: create_moon_sleep_indicator(row.get("today_sleep_score"), "Previous", effect_color=effect_scale.to_dict()["scheme"]), axis=1)
+        df["tmr_moon_image"] = df.apply(lambda row: create_moon_sleep_indicator(row.get("tmr_sleep_score"), "Next", effect_color=effect_scale.to_dict()["scheme"]), axis=1)
+        # Convert to Altair data and plot
+        data = df_to_altair(df)
+        today_moon_chart = alt.Chart(data).mark_image(
             width=80,
             height=100
         ).encode(
-            x=alt.X("modified_x:Q"),
-            y=y_encoding,
-            url='moon_image:N',
+            x = alt.X("x1:Q"),
+            y = alt.Y("y1:Q"),
+            url="today_moon_image:N",
             tooltip=[
                 alt.Tooltip("instance_label:N", title="Instance"),
-                alt.Tooltip("sleep_label:N", title="Sleep Quality"),
-                alt.Tooltip("sleep_score_display:N", title="Sleep Score")
+                alt.Tooltip("today_sleep_label:N", title="Sleep Quality"),
+                alt.Tooltip("today_sleep_score:Q", title="Sleep Score")
             ]
-        ).transform_calculate(
-            "modified_x", f"max(datum.mins * {x_padding}, {shared_x_max} * {x_padding})"
         )
-        
-        # Create empty charts to maintain the expected return structure
-        empty_chart1 = alt.Chart(pd.DataFrame()).mark_point().encode()
-        empty_chart2 = alt.Chart(pd.DataFrame()).mark_point().encode()
-        
-        return moon_chart, empty_chart1, empty_chart2
+        tmr_moon_chart = alt.Chart(data).mark_image(
+            width=80,
+            height=100
+        ).encode(
+            x = alt.X("x2:Q"),
+            y = alt.Y("y1:Q"),
+            url="tmr_moon_image:N",
+            tooltip=[
+                alt.Tooltip("instance_label:N", title="Instance"),
+                alt.Tooltip("tmr_sleep_label:N", title="Sleep Quality"),
+                alt.Tooltip("tmr_sleep_score:Q", title="Sleep Score")
+            ]
+        )
+        return self.combine_layers([today_moon_chart, tmr_moon_chart])
     
     def create_trajectory_regression(self, instance_df:pd.DataFrame, 
                                     instances_to_process:list[str], 
                                     x_axis:alt.X, y_scale:alt.Scale, effect_scale:alt.Scale,
-                                    regression_method:str="simple") -> list[alt.Chart]:
+                                    regression_method:str="simple") -> alt.Chart:
         """
         Method that creates regression trend lines using simple linear regression.
         """
@@ -593,8 +601,10 @@ class ComparisonPlotsManager:
                         })
                         # Create a highlighter effect with dashed lines
                         
+                        data = df_to_altair(regression_df)
+
                         # Wide, very transparent background (no dashes)
-                        wide_background = alt.Chart(regression_df).mark_line(
+                        wide_background = alt.Chart(data).mark_line(
                             strokeWidth=7,  # Very wide for highlighter effect
                             opacity=0.2      # Very transparent
                         ).encode(
@@ -605,7 +615,7 @@ class ComparisonPlotsManager:
                         )
                         
                         # Medium background with wide dashes
-                        medium_background = alt.Chart(regression_df).mark_line(
+                        medium_background = alt.Chart(data).mark_line(
                             strokeWidth=5,    # Medium width
                             opacity=0.3,      # Medium transparency
                             strokeDash=[4, 4] # Wide dashes
@@ -617,7 +627,7 @@ class ComparisonPlotsManager:
                         )
                         
                         # Main dashed line on top
-                        main_line = alt.Chart(regression_df).mark_line(
+                        main_line = alt.Chart(data).mark_line(
                             strokeWidth=2.3,    # Thicker main line
                             opacity=0.8,      # Slightly transparent
                             strokeDash=[4, 4] # Standard dashes
@@ -640,8 +650,7 @@ class ComparisonPlotsManager:
                     except Exception as e:
                         print(f"Linear regression failed: {e}")
 
-        return [self.combine_layers(regression_layers, resolve="shared")]
-
+        return self.combine_layers(regression_layers, resolve="shared")
     
     def create_trajectory_events(self, instance_df:pd.DataFrame) -> alt.Chart:
 
@@ -669,8 +678,9 @@ class ComparisonPlotsManager:
         
         # Concatenate all events into one dataframe and plot in a single chart layer
         all_events_df = pd.concat(event_df_list)
+        data = df_to_altair(all_events_df)
         color_scale = alt.Scale(domain=instance_types, range=instance_colors)
-        event_chart = alt.Chart(all_events_df).mark_point(
+        event_chart = alt.Chart(data).mark_point(
             filled=True, opacity=0.8, size=100
         ).encode(
             x=alt.X("mins:Q"),
@@ -699,7 +709,9 @@ class ComparisonPlotsManager:
             effect_differences_df = self.differences_df[self.differences_df["effect"] == effect]
             if effect_differences_df.empty: continue
 
-            bars = alt.Chart(effect_differences_df).mark_bar()
+            data = df_to_altair(effect_differences_df)
+
+            bars = alt.Chart(data).mark_bar()
             if first_plot:
                 bars = bars.properties(title=alt.Title(f"% Change in {self.var_label} Before and After {self.instance_type.title()}", anchor="middle"))
                 y_axis_title = ""

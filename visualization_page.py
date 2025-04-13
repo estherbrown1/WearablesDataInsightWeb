@@ -41,7 +41,7 @@ DESC_TEXT = {
         "Number of **steps taken** throughout the day."
 }
 
-def questionaire(selected, var_name = "events"):
+def questionaire(selected, start_date, end_date, var_name = "events"):
 
     with st.container():
         st.markdown("### Add New Entry")
@@ -68,78 +68,81 @@ def questionaire(selected, var_name = "events"):
 
         # 2. Time Selection
         st.markdown("#### 2. Time Range")
+        # try:
         try:
             selected_times = selected["selection"]["param_1"]["isoDate"]
             start_time = pd.to_datetime(selected_times[0] + LOCAL_OFFSET, unit='ms')
             end_time = pd.to_datetime(selected_times[1] + LOCAL_OFFSET, unit='ms')
-            start_time = start_time.tz_localize(None)
-            end_time = end_time.tz_localize(None)
+        except:
+            start_time, end_time = start_date, end_date
+        start_time = start_time.tz_localize(None)
+        end_time = end_time.tz_localize(None)
 
-            col1, col2 = st.columns(2)
-            with col1:
-                st.markdown("**Start**")
-                start_date = st.date_input("Start date", value=start_time.date(), label_visibility="collapsed")
-                start_time_input = st.time_input(
-                    "Start time",
-                    value=start_time.time(),
-                    label_visibility="collapsed",
-                    step=60
-                )
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("**Start**")
+            start_date = st.date_input("Start date", value=start_time.date(), label_visibility="collapsed")
+            start_time_input = st.time_input(
+                "Start time",
+                value=start_time.time(),
+                label_visibility="collapsed",
+                step=60
+            )
+        
+        with col2:
+            st.markdown("**End**")
+            end_date = st.date_input("End date", value=end_time.date(), label_visibility="collapsed")
+            end_time_input = st.time_input(
+                "End time",
+                value=end_time.time(),
+                label_visibility="collapsed",
+                step=60
+            )
+
+        # Combine date and time
+        start_datetime = datetime.datetime.combine(start_date, start_time_input)
+        end_datetime = datetime.datetime.combine(end_date, end_time_input)
+
+        if end_datetime <= start_datetime:
+            st.error("⚠️ End time must be after start time")
+            return
+
+        # Review and Submit
+        with st.form("user_response_form", clear_on_submit=True):
+            st.markdown("#### Review and Submit")
+            st.markdown(f"""
+            **Type:** {var_name.capitalize()}
+            **Activity:** {other_response}
+            **Time:** {start_datetime.strftime('%Y-%m-%d %H:%M')} to {end_datetime.strftime('%Y-%m-%d %H:%M')}
+            """)
             
-            with col2:
-                st.markdown("**End**")
-                end_date = st.date_input("End date", value=end_time.date(), label_visibility="collapsed")
-                end_time_input = st.time_input(
-                    "End time",
-                    value=end_time.time(),
-                    label_visibility="collapsed",
-                    step=60
-                )
-
-            # Combine date and time
-            start_datetime = datetime.datetime.combine(start_date, start_time_input)
-            end_datetime = datetime.datetime.combine(end_date, end_time_input)
-
-            if end_datetime <= start_datetime:
-                st.error("⚠️ End time must be after start time")
-                return
-
-            # Review and Submit
-            with st.form("user_response_form", clear_on_submit=True):
-                st.markdown("#### Review and Submit")
-                st.markdown(f"""
-                **Type:** {var_name.capitalize()}
-                **Activity:** {other_response}
-                **Time:** {start_datetime.strftime('%Y-%m-%d %H:%M')} to {end_datetime.strftime('%Y-%m-%d %H:%M')}
-                """)
-                
-                submitted = st.form_submit_button("Submit Entry")
-                if submitted:
-                    try:
-                        if st.session_state['other_selected']:
-                            save_other_response(st.session_state['user'], other_response, var_name=var_name)
-                        
-                        # Convert to milliseconds timestamp for database
-                        start_timestamp = int(start_datetime.timestamp() * 1000)
-                        end_timestamp = int(end_datetime.timestamp() * 1000)
-                        
-                        record_event_in_database(
-                            st.session_state['user'],
-                            start_timestamp,
-                            end_timestamp,
-                            other_response,
-                            var_name=var_name
-                        )
-                        st.success("✅ Entry recorded successfully!")
-                        # Instead of immediate rerun, set a flag to redirect
-                        st.session_state['submit_selection'] = False
-                        st.session_state['show_annotations'] = True
-                        time.sleep(3)  # Give user time to see success message
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"❌ Error saving entry: {str(e)}")
-        except Exception as e:
-            st.error("⚠️ Please select a time range on the plot first")
+            submitted = st.form_submit_button("Submit Entry")
+            if submitted:
+                try:
+                    if st.session_state['other_selected']:
+                        save_other_response(st.session_state['user'], other_response, var_name=var_name)
+                    
+                    # Convert to milliseconds timestamp for database
+                    start_timestamp = int(start_datetime.timestamp() * 1000)
+                    end_timestamp = int(end_datetime.timestamp() * 1000)
+                    
+                    record_event_in_database(
+                        st.session_state['user'],
+                        start_timestamp,
+                        end_timestamp,
+                        other_response,
+                        var_name=var_name
+                    )
+                    st.success("✅ Entry recorded successfully!")
+                    # Instead of immediate rerun, set a flag to redirect
+                    st.session_state['submit_selection'] = False
+                    st.session_state['show_annotations'] = True
+                    time.sleep(3)  # Give user time to see success message
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ Error saving entry: {str(e)}")
+        # except Exception as e:
+        #     st.error("⚠️ Please select a time range on the plot first")
             return
 
 def add_annotations(table_name, start_date, end_date, start_hour, end_hour):
@@ -422,9 +425,9 @@ def visualization_page(annotation = False, diff_plot = False):
             # Check if there's a valid selection
             if selected is not None and "selection" in selected and "param_1" in selected["selection"]:
                 if choice == 'Events':
-                    questionaire(selected, var_name="events")
+                    questionaire(selected, start_date, end_date, var_name="events")
                 elif choice == 'Interventions':
-                    questionaire(selected, var_name="interventions")
+                    questionaire(selected, start_date, end_date, var_name="interventions")
             else:
                 st.info("Please select a time range by clicking and dragging on the plot")
 
