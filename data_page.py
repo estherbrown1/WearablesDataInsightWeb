@@ -5,8 +5,11 @@ import zipfile
 import numpy as np
 import pandas as pd
 import streamlit as st
+import streamlit_analytics
 from datetime import datetime
 from sql_utils import *
+
+streamlit_analytics.start_tracking()
 
 # Streamlit application
 def data_upload():
