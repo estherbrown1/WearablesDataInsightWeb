@@ -10,11 +10,14 @@ from sql_utils import get_admin_name
 from home import home_page
 from physiological_analysis import run_stepper_extraction
 
-password = st.secrets["password"]
+# Try to get password from secrets, otherwise use default
+try:
+    password = st.secrets["password"]
+except:
+    password = "default_analytics_password"  # Default fallback password
+
 with streamlit_analytics.track(unsafe_password=password):
-
     def main():
-
         st.sidebar.title("Main Menu")
         page = st.sidebar.radio(
             "Go to",
