@@ -642,12 +642,12 @@ def get_instances(user: str, instance_type: str, instance: str, mins_before: int
                     
                     if sleep_df.empty:
                         # Try alternative sleep table
-                cursor.execute(f"""
-                    SELECT score
-                    FROM {user}_sleep
+                        cursor.execute(f"""
+                            SELECT score
+                            FROM {user}_sleep
                             WHERE DATE(start_time) = '{today_str}'
-                    ORDER BY start_time DESC
-                    LIMIT 1
+                            ORDER BY start_time DESC
+                            LIMIT 1
                         """)
                         alt_sleep_result = cursor.fetchone()
                         
@@ -655,12 +655,12 @@ def get_instances(user: str, instance_type: str, instance: str, mins_before: int
                             sleep_score = alt_sleep_result[0]
                             var_df["sleep_score"] = sleep_score
                     
-                    # Add sleep label based on score
+                            # Add sleep label based on score
                             if sleep_score >= 90:
                                 var_df["sleep_label"] = "Excellent"
                             elif sleep_score >= 80:
                                 var_df["sleep_label"] = "Good"
-                    elif sleep_score >= 60:
+                            elif sleep_score >= 60:
                                 var_df["sleep_label"] = "Fair"
                             else:
                                 var_df["sleep_label"] = "Poor"
@@ -676,7 +676,7 @@ def get_instances(user: str, instance_type: str, instance: str, mins_before: int
                         for df, day in zip([today_df, tmr_df],["today", "tmr"]):
                             if len(df) == 1:
                                 sleep_dur, sleep_score, sleep_label = df.iloc[0][["durationInMs", "overallSleepScore", "overallSleepQualifier"]]
-                else:
+                            else:
                                 sleep_dur, sleep_score, sleep_label = None, None, None
                             var_df[f"{day}_sleep_hours"] = pd.to_timedelta(sleep_dur, unit="ms").total_seconds() / 60 / 60
                             var_df[f"{day}_sleep_score"] = sleep_score
