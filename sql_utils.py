@@ -65,8 +65,8 @@ def fetch_past_options(user_name, var_name="events"):
     """
     conn = None  # Initialize conn
     try:
-    conn = get_rds_connection()
-    cursor = conn.cursor()
+        conn = get_rds_connection()
+        cursor = conn.cursor()
 
         # Validate var_name is either 'events' or 'interventions'
         if var_name not in ['events', 'interventions']:
@@ -104,14 +104,11 @@ def fetch_past_options(user_name, var_name="events"):
         # Fetch results and filter out None or empty values
         options = [row[0] for row in cursor.fetchall() if row[0] is not None and str(row[0]).strip() != '']
         print(f"Debug: Found options for {var_name} for user '{user_name}': {options}")
-    return options
+        return options
 
     except Exception as e:
         # Log the error for debugging
         print(f"Error in fetch_past_options for table '{var_name}', user '{user_name}': {str(e)}")
-        # Consider adding traceback here if needed:
-        # import traceback
-        # print(traceback.format_exc())
         return [] # Return empty list on error
 
     finally:
@@ -135,26 +132,26 @@ def save_other_response(user_name, response, var_name="events"):
             conn.commit()
         
         # Now we can safely fetch past responses
-    cursor.execute(f"SELECT {var_name} FROM users WHERE name = %s", (user_name,))
-    past_responses = cursor.fetchall()
+        cursor.execute(f"SELECT {var_name} FROM users WHERE name = %s", (user_name,))
+        past_responses = cursor.fetchall()
 
-    # Convert the results into a flat list of strings
-    options = []
-    if past_responses and past_responses[0][0]:  # Check if past responses exist and are not None
-        options = past_responses[0][0].split("|||")
+        # Convert the results into a flat list of strings
+        options = []
+        if past_responses and past_responses[0][0]:  # Check if past responses exist and are not None
+            options = past_responses[0][0].split("|||")
     
-    options.append(response)
-    new_options = "|||".join(options)
+        options.append(response)
+        new_options = "|||".join(options)
 
         # Update the user's response
-    cursor.execute(f"UPDATE users SET {var_name} = %s WHERE name = %s", (new_options, user_name))
+        cursor.execute(f"UPDATE users SET {var_name} = %s WHERE name = %s", (new_options, user_name))
         conn.commit()
         
     except Exception as e:
         conn.rollback()
         raise e
     finally:
-    conn.close()
+        conn.close()
 
 def record_event_in_database(user, start_time, end_time, event_name, var_name,
                              category=None, notes=None, impact_feedback=None, event_type=None):
@@ -203,14 +200,14 @@ def record_event_in_database(user, start_time, end_time, event_name, var_name,
             event_name, start_time, end_time, event_name,
             category, notes, impact_feedback, user, event_type
         ))
-    conn.commit()
+        conn.commit()
 
         print(f"✅ Successfully inserted: {event_name} ({start_time} → {end_time}) into {var_name}")
     except Exception as e:
         print(f"❌ Error recording {event_name}: {e}")
         conn.rollback()
     finally:
-    conn.close()
+        conn.close()
 
 
 
