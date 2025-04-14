@@ -322,7 +322,6 @@ def diff_plot_util(selected_var_dfname):
                 st.exception(e)
 
 def visualization_page(annotation = False, diff_plot = False):
-
     st.title("Data Visualization")
 
     if 'submit_selection' not in st.session_state:

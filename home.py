@@ -1,7 +1,4 @@
 import streamlit as st
-import streamlit_analytics
-
-streamlit_analytics.start_tracking()
 
 def home_page():
     """
