@@ -562,204 +562,97 @@ def visualize_analysis(results_df: pd.DataFrame, username: str):
         st.info("Your data was imported, but all entries have 'Unspecified' as the name. Please import data with specific names or recategorize your entries.")
         return
     st.subheader(f"Physiological Impact Analysis for User: {username}")
-    viz_tabs = st.tabs(["Overall Impact", "Pattern Analysis", "ML Analysis", "Detailed Results"])
     
-    with viz_tabs[0]:
-        st.write("### Overall Impact by Type")
-        impact_by_type = plot_df.groupby('instance_type')['impact_score'].mean().reset_index()
-        fig1, ax1 = plt.subplots(figsize=(10, 6))
-        impact_colors = ['green' if score > 0 else 'red' for score in impact_by_type['impact_score']]
-        bars = ax1.bar(impact_by_type['instance_type'], impact_by_type['impact_score'], color=impact_colors)
-        ax1.axhline(y=0, color='black', linestyle='-', alpha=0.3)
-        for i, p in enumerate(bars):
-            height = p.get_height()
-            y_pos = height - 5 if height < 0 else height + 5
-            text_color = 'black'
-            ax1.annotate(f'{height:.1f}', (p.get_x() + p.get_width()/2, y_pos),
-                         ha='center', va='center', fontsize=12, color=text_color, fontweight='bold')
-        ax1.set_title("Average Physiological Impact by Type")
-        ax1.set_xlabel("Type")
-        ax1.set_ylabel("Impact Score (higher is better)")
-        plt.tight_layout(rect=[0, 0.07, 1, 0.95])
-        legend_elements = [plt.Rectangle((0,0),1,1,color='green', label='Positive (Beneficial)'),
-                           plt.Rectangle((0,0),1,1,color='red', label='Negative (Detrimental)')]
-        ax1.legend(handles=legend_elements, loc='best')
-        st.pyplot(fig1)
-        st.markdown("""
-        **Impact Score Key:**
-        
-        Impact Score is computed automatically using standardized changes from all physiological metrics.
-        For each metric (like stress_change, rmssd_change, bbi_change, etc.), the percent change is converted to a z‑score
-        (i.e. (value - mean) / standard deviation). For metrics where a decrease is beneficial (e.g. stress_change), the z‑score
-        is multiplied by –1. The final Impact Score is the average of these standardized values.
-        This approach allows the data itself to determine the relative importance of each metric without manually setting weights.
-        """)
-        
-        st.write("### Impact by Reported Sentiment")
-        sentiment_df = plot_df[plot_df['sentiment'] != 'Unknown']
-        if not sentiment_df.empty:
-            impact_by_sentiment = sentiment_df.groupby('sentiment')['impact_score'].mean().reset_index()
-            fig2, ax2 = plt.subplots(figsize=(10, 6))
-            sentiment_colors = ['green' if score > 0 else 'red' for score in impact_by_sentiment['impact_score']]
-            sentiment_order = ['Positive', 'Neutral', 'Negative']
-            ordered_sentiment = pd.concat([impact_by_sentiment[impact_by_sentiment['sentiment'] == s] for s in sentiment_order if s in impact_by_sentiment['sentiment'].values])
-            if not ordered_sentiment.empty:
-                bars = ax2.bar(ordered_sentiment['sentiment'], ordered_sentiment['impact_score'],
-                               color=[sentiment_colors[impact_by_sentiment['sentiment'].tolist().index(s)] for s in ordered_sentiment['sentiment']])
-                ax2.axhline(y=0, color='black', linestyle='-', alpha=0.3)
-                for i, p in enumerate(bars):
-                    height = p.get_height()
-                    y_pos = height - 5 if height < 0 else height + 5
-                    text_color = 'white' if height < 0 else 'black'
-                    ax2.annotate(f'{height:.1f}', (p.get_x() + p.get_width()/2, y_pos),
-                                 ha='center', va='center', fontsize=12, color=text_color, fontweight='bold')
-                ax2.set_title("Average Impact by Reported Sentiment")
-                ax2.set_xlabel("Sentiment")
-                ax2.set_ylabel("Impact Score (higher is better)")
-                legend_elements = [plt.Rectangle((0,0),1,1,color='green', label='Positive (Beneficial)'),
-                                   plt.Rectangle((0,0),1,1,color='red', label='Negative (Detrimental)')]
-                ax2.legend(handles=legend_elements, loc='best')
-                ax2.set_xticklabels(ordered_sentiment['sentiment'], rotation=45, ha='right')
-                plt.tight_layout()
-                st.pyplot(fig2)
-                if 'Positive' in ordered_sentiment['sentiment'].values:
-                    pos_impact = ordered_sentiment[ordered_sentiment['sentiment'] == 'Positive']['impact_score'].iloc[0]
-                    if pos_impact < 0:
-                        st.markdown("""
-                        > **Note:** Some events labeled as positive show negative physiological effects.
-                        """)
+    # Standardized Metrics Visualizations
+    st.write("### HRV Change by Event/Intervention Name")
+    name_hrv_change = plot_df.groupby('name')['rmssd_change'].mean().reset_index()
+    mean_hrv = name_hrv_change['rmssd_change'].mean()
+    std_hrv = name_hrv_change['rmssd_change'].std() if name_hrv_change['rmssd_change'].std() != 0 else 1e-6
+    name_hrv_change['std_hrv'] = (name_hrv_change['rmssd_change'] - mean_hrv) / std_hrv
+    name_hrv_change['std_hrv_pct'] = name_hrv_change['std_hrv'] * 100
+    fig3, ax4 = plt.subplots(figsize=(12, 6))
+    name_hrv_change = name_hrv_change.sort_values('std_hrv', ascending=False)
+    hrv_colors = ['green' if val > 0 else 'red' for val in name_hrv_change['std_hrv_pct']]
+    bars = ax4.bar(name_hrv_change['name'], name_hrv_change['std_hrv_pct'], color=hrv_colors)
+    ax4.axhline(y=0, color='black', linestyle='-', alpha=0.5)
+    ax4.set_title("Standardized HRV Change by Event/Intervention Name")
+    ax4.set_xlabel("Event/Intervention")
+    ax4.set_ylabel("Standardized HRV Change (%; higher is better)")
+    ax4.set_xticklabels(name_hrv_change['name'], rotation=45, ha='right')
+    plt.tight_layout()
+    st.pyplot(fig3)
     
-    with viz_tabs[1]:
-        # Standardized Metrics Visualizations
-        st.write("### HRV Change by Event/Intervention Name")
-        name_hrv_change = plot_df.groupby('name')['rmssd_change'].mean().reset_index()
-        mean_hrv = name_hrv_change['rmssd_change'].mean()
-        std_hrv = name_hrv_change['rmssd_change'].std() if name_hrv_change['rmssd_change'].std() != 0 else 1e-6
-        name_hrv_change['std_hrv'] = (name_hrv_change['rmssd_change'] - mean_hrv) / std_hrv
-        name_hrv_change['std_hrv_pct'] = name_hrv_change['std_hrv'] * 100
-        fig3, ax4 = plt.subplots(figsize=(12, 6))
-        name_hrv_change = name_hrv_change.sort_values('std_hrv', ascending=False)
-        hrv_colors = ['green' if val > 0 else 'red' for val in name_hrv_change['std_hrv_pct']]
-        bars = ax4.bar(name_hrv_change['name'], name_hrv_change['std_hrv_pct'], color=hrv_colors)
-        ax4.axhline(y=0, color='black', linestyle='-', alpha=0.5)
-        for i, p in enumerate(bars):
-            pct_val = name_hrv_change['std_hrv_pct'].iloc[i]
-            y_pos = pct_val - 5 if pct_val < 0 else pct_val + 5
-            text_color = 'black'
-            ax4.annotate(f'{pct_val:.1f}%', (p.get_x() + p.get_width()/2, y_pos),
-                         ha='center', va='center', fontsize=11, color=text_color, fontweight='bold')
-        ax4.set_title("Standardized HRV Change by Event/Intervention Name")
-        ax4.set_xlabel("Event/Intervention")
-        ax4.set_ylabel("Standardized HRV Change (%; higher is better)")
-        ax4.set_xticklabels(name_hrv_change['name'], rotation=45, ha='right')
-        plt.tight_layout()
-        st.pyplot(fig3)
-        
-        st.write("### BBI Change by Event/Intervention Name")
-        name_bbi_change = plot_df.groupby('name')['bbi_change'].mean().reset_index()
-        mean_bbi = name_bbi_change['bbi_change'].mean()
-        std_bbi = name_bbi_change['bbi_change'].std() if name_bbi_change['bbi_change'].std() != 0 else 1e-6
-        name_bbi_change['std_bbi'] = (name_bbi_change['bbi_change'] - mean_bbi) / std_bbi
-        name_bbi_change['std_bbi_pct'] = name_bbi_change['std_bbi'] * 100
-        fig4, ax5 = plt.subplots(figsize=(12, 6))
-        name_bbi_change = name_bbi_change.sort_values('std_bbi', ascending=False)
-        bbi_colors = ['green' if val > 0 else 'red' for val in name_bbi_change['std_bbi_pct']]
-        bars = ax5.bar(name_bbi_change['name'], name_bbi_change['std_bbi_pct'], color=bbi_colors)
-        ax5.axhline(y=0, color='black', linestyle='-', alpha=0.5)
-        for i, p in enumerate(bars):
-            pct_val = name_bbi_change['std_bbi_pct'].iloc[i]
-            y_pos = pct_val - 5 if pct_val < 0 else pct_val + 5
-            text_color = 'black'
-            ax5.annotate(f'{pct_val:.1f}%', (p.get_x() + p.get_width()/2, y_pos),
-                         ha='center', va='center', fontsize=11, color=text_color, fontweight='bold')
-        ax5.set_title("Standardized BBI Change by Event/Intervention Name")
-        ax5.set_xlabel("Event/Intervention")
-        ax5.set_ylabel("Standardized BBI Change (%; higher is better)")
-        ax5.set_xticklabels(name_bbi_change['name'], rotation=45, ha='right')
-        plt.tight_layout()
-        st.pyplot(fig4)
-        
-        
-        st.write("### Which events/interventions are most effective at reducing Garmin's proprietary stress metric?")
-        name_stress_change = plot_df.groupby('name')['stress_change'].mean().reset_index()
-        mean_stress = name_stress_change['stress_change'].mean()
-        std_stress = name_stress_change['stress_change'].std() if name_stress_change['stress_change'].std() != 0 else 1e-6
-        name_stress_change['std_stress'] = -1 * (name_stress_change['stress_change'] - mean_stress) / std_stress
-        name_stress_change['std_stress_pct'] = name_stress_change['std_stress'] * 100
-        fig5, ax3 = plt.subplots(figsize=(12, 6))
-        name_stress_change = name_stress_change.sort_values('std_stress', ascending=False)
-        stress_colors = ['green' if val > 0 else 'red' for val in name_stress_change['std_stress_pct']]
-        bars = ax3.bar(name_stress_change['name'], name_stress_change['std_stress_pct'], color=stress_colors)
-        ax3.axhline(y=0, color='black', linestyle='-', alpha=0.5)
-        for i, p in enumerate(bars):
-            pct_val = name_stress_change['std_stress_pct'].iloc[i]
-            y_pos = pct_val - 10 if pct_val < 0 else pct_val + 10
-            ax3.annotate(f'{pct_val:.1f}%', (p.get_x() + p.get_width()/2, y_pos),
-                         ha='center', va='center', fontsize=11, color='black', fontweight='bold')
-        ax3.set_title("Standardized Stress Reduction by Event/Intervention Name")
-        ax3.set_xlabel("Event/Intervention")
-        ax3.set_ylabel("Standardized Stress Reduction (%; higher is better)")
-        ax3.set_xticklabels(name_stress_change['name'], rotation=45, ha='right')
-        plt.tight_layout()
-        st.pyplot(fig5)
-        
-        
-        
-        # ----- Additional Temporal Patterns: Heatmap for Standardized Stress Reduction Magnitude -----
-        # Compute global mean and std for stress_change from results_df
-        mean_stress = results_df['stress_change'].mean()
-        std_stress = results_df['stress_change'].std() if results_df['stress_change'].std() != 0 else 1e-6
-        # Standardize stress_change (flip sign so that a decrease becomes positive)
-        results_df['std_stress'] = -1 * (results_df['stress_change'] - mean_stress) / std_stress
-
-        # Group by day of week and time of day to compute the average standardized stress reduction
-        temporal_patterns = results_df.groupby(['day_of_week', 'time_of_day'])['std_stress'].mean().reset_index()
-
-        # Optionally, define an order for the days of the week
-        day_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-        temporal_patterns['day_of_week'] = pd.Categorical(temporal_patterns['day_of_week'], categories=day_order, ordered=True)
-
-        # Pivot the data so rows are days and columns are times
-        temporal_pivot = temporal_patterns.pivot(index='day_of_week', columns='time_of_day', values='std_stress')
-        print(temporal_pivot)
-        # Reorder the columns to always correspond to morning, afternoon, evening, night
-        time_cols = []
-        for time in ["Morning", "Afternoon", "Evening", "Night"]:
-            if time in temporal_pivot.columns:
-                time_cols.append(time)
-        temporal_pivot = temporal_pivot[time_cols]
-        # Reindex to sort rows
-        temporal_pivot = temporal_pivot.reindex(day_order)
-        temporal_pivot = temporal_pivot.dropna(how="all")
-        print(temporal_pivot)
-
-        st.write("#### Heatmap: Average Standardized Stress Reduction by Day of Week and Time of Day")
-        fig_heat, ax_heat = plt.subplots(figsize=(8, 6))
-        sns.heatmap(temporal_pivot, annot=True, cmap='viridis', fmt=".2f", ax=ax_heat)
-        ax_heat.set_title("Standardized Stress Reduction by Day and Time")
-        ax_heat.set_xlabel("Time of Day")
-        ax_heat.set_ylabel("Day of Week")
-        st.pyplot(fig_heat)
-
+    st.write("### BBI Change by Event/Intervention Name")
+    name_bbi_change = plot_df.groupby('name')['bbi_change'].mean().reset_index()
+    mean_bbi = name_bbi_change['bbi_change'].mean()
+    std_bbi = name_bbi_change['bbi_change'].std() if name_bbi_change['bbi_change'].std() != 0 else 1e-6
+    name_bbi_change['std_bbi'] = (name_bbi_change['bbi_change'] - mean_bbi) / std_bbi
+    name_bbi_change['std_bbi_pct'] = name_bbi_change['std_bbi'] * 100
+    fig4, ax5 = plt.subplots(figsize=(12, 6))
+    name_bbi_change = name_bbi_change.sort_values('std_bbi', ascending=False)
+    bbi_colors = ['green' if val > 0 else 'red' for val in name_bbi_change['std_bbi_pct']]
+    bars = ax5.bar(name_bbi_change['name'], name_bbi_change['std_bbi_pct'], color=bbi_colors)
+    ax5.axhline(y=0, color='black', linestyle='-', alpha=0.5)
+    ax5.set_title("Standardized BBI Change by Event/Intervention Name")
+    ax5.set_xlabel("Event/Intervention")
+    ax5.set_ylabel("Standardized BBI Change (%; higher is better)")
+    ax5.set_xticklabels(name_bbi_change['name'], rotation=45, ha='right')
+    plt.tight_layout()
+    st.pyplot(fig4)
     
-    with viz_tabs[2]:
-        results_df_ml = exploratory_ml_analysis(results_df, n_clusters=3)
-        st.write("The ML analysis clusters events/interventions based on physiological and contextual features. Explore the PCA, t-SNE, and UMAP projections above.")
+    st.write("### Which events/interventions are most effective at reducing Garmin's proprietary stress metric?")
+    name_stress_change = plot_df.groupby('name')['stress_change'].mean().reset_index()
+    mean_stress = name_stress_change['stress_change'].mean()
+    std_stress = name_stress_change['stress_change'].std() if name_stress_change['stress_change'].std() != 0 else 1e-6
+    name_stress_change['std_stress'] = -1 * (name_stress_change['stress_change'] - mean_stress) / std_stress
+    name_stress_change['std_stress_pct'] = name_stress_change['std_stress'] * 100
+    fig5, ax3 = plt.subplots(figsize=(12, 6))
+    name_stress_change = name_stress_change.sort_values('std_stress', ascending=False)
+    stress_colors = ['green' if val > 0 else 'red' for val in name_stress_change['std_stress_pct']]
+    bars = ax3.bar(name_stress_change['name'], name_stress_change['std_stress_pct'], color=stress_colors)
+    ax3.axhline(y=0, color='black', linestyle='-', alpha=0.5)
+    ax3.set_title("Standardized Stress Reduction by Event/Intervention Name")
+    ax3.set_xlabel("Event/Intervention")
+    ax3.set_ylabel("Standardized Stress Reduction (%; higher is better)")
+    ax3.set_xticklabels(name_stress_change['name'], rotation=45, ha='right')
+    plt.tight_layout()
+    st.pyplot(fig5)
     
-    with viz_tabs[3]:
-        st.write("### Detailed Analysis Results")
-        display_df = results_df.copy()
-        display_df['start_time'] = display_df['start_time'].dt.strftime('%Y-%m-%d %H:%M')
-        display_df['end_time'] = display_df['end_time'].dt.strftime('%Y-%m-%d %H:%M')
-        display_cols = ['username', 'instance_type', 'name', 'start_time', 'end_time',
-                        'duration_minutes', 'time_of_day', 'day_of_week', 'pre_stress_state',
-                        'sentiment', 'reported_impact', 'stress_reduction',
-                        'rmssd_change', 'bbi_change', 'stress_change', 'impact_score', 'notes']
-        final_df = display_df[display_cols].copy()
-        for col in ['duration_minutes', 'rmssd_change', 'bbi_change', 'stress_change', 'impact_score']:
-            if col in final_df.columns:
-                final_df[col] = final_df[col].round(2)
-        st.dataframe(final_df)
+    # ----- Additional Temporal Patterns: Heatmap for Standardized Stress Reduction Magnitude -----
+    # Compute global mean and std for stress_change from results_df
+    mean_stress = results_df['stress_change'].mean()
+    std_stress = results_df['stress_change'].std() if results_df['stress_change'].std() != 0 else 1e-6
+    # Standardize stress_change (flip sign so that a decrease becomes positive)
+    results_df['std_stress'] = -1 * (results_df['stress_change'] - mean_stress) / std_stress
+
+    # Group by day of week and time of day to compute the average standardized stress reduction
+    temporal_patterns = results_df.groupby(['day_of_week', 'time_of_day'])['std_stress'].mean().reset_index()
+
+    # Optionally, define an order for the days of the week
+    day_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    temporal_patterns['day_of_week'] = pd.Categorical(temporal_patterns['day_of_week'], categories=day_order, ordered=True)
+
+    # Pivot the data so rows are days and columns are times
+    temporal_pivot = temporal_patterns.pivot(index='day_of_week', columns='time_of_day', values='std_stress')
+    print(temporal_pivot)
+    # Reorder the columns to always correspond to morning, afternoon, evening, night
+    time_cols = []
+    for time in ["Morning", "Afternoon", "Evening", "Night"]:
+        if time in temporal_pivot.columns:
+            time_cols.append(time)
+    temporal_pivot = temporal_pivot[time_cols]
+    # Reindex to sort rows
+    temporal_pivot = temporal_pivot.reindex(day_order)
+    temporal_pivot = temporal_pivot.dropna(how="all")
+    print(temporal_pivot)
+
+    st.write("#### Heatmap: Average Standardized Stress Reduction by Day of Week and Time of Day")
+    fig_heat, ax_heat = plt.subplots(figsize=(8, 6))
+    sns.heatmap(temporal_pivot, annot=True, cmap='viridis', fmt=".2f", ax=ax_heat)
+    ax_heat.set_title("Standardized Stress Reduction by Day and Time")
+    ax_heat.set_xlabel("Time of Day")
+    ax_heat.set_ylabel("Day of Week")
+    st.pyplot(fig_heat)
 
     return results_df
 
@@ -1048,7 +941,7 @@ def run_stepper_extraction():
         minutes_window = st.slider("Minutes to analyze before/after events:", 
                                min_value=5, 
                                max_value=120, 
-                               value=10,
+                               value=5,
                                help="Number of minutes to analyze before and after each event or intervention")
         
         # Convert minutes to hours for the analysis
@@ -1059,12 +952,24 @@ def run_stepper_extraction():
         extract physiologically relevant features and identify patterns that predict whether specific
         interventions or events yield positive or negative outcomes in reducing stress.
         """)
-        if st.button("Extract Features"):
+        
+        # Initialize session state for results if not present
+        if 'impact_results' not in st.session_state:
+            st.session_state.impact_results = None
+        if 'last_minutes_window' not in st.session_state:
+            st.session_state.last_minutes_window = minutes_window
+            
+        # Check if we need to update results
+        should_update = (st.session_state.last_minutes_window != minutes_window or 
+                        st.session_state.impact_results is None)
+        
+        if st.button("Extract Features") or should_update:
             with st.spinner("Analyzing physiological data..."):
                 try:
                     results = analyze_physiological_impact(username, hours_window)
                     if results is not None and not results.empty:
-                        st.session_state['impact_results'] = results
+                        st.session_state.impact_results = results
+                        st.session_state.last_minutes_window = minutes_window
                         visualize_analysis(results, username)
                         csv = results.to_csv(index=False)
                         st.download_button(label="Download Analysis as CSV", data=csv,
@@ -1108,6 +1013,12 @@ def run_stepper_extraction():
                     st.error(f"Error during analysis: {str(e)}")
                     import traceback
                     st.error(traceback.format_exc())
+        elif st.session_state.impact_results is not None:
+            # Display existing results if available
+            visualize_analysis(st.session_state.impact_results, username)
+            csv = st.session_state.impact_results.to_csv(index=False)
+            st.download_button(label="Download Analysis as CSV", data=csv,
+                               file_name=f"{username}_feature_extraction.csv", mime="text/csv")
     
     with tab2:
         upload_annotations(username)
