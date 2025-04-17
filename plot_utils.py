@@ -735,7 +735,8 @@ class ComparisonPlotsManager:
 
         # Render the chart in Streamlit
         chart = alt.vconcat(*bar_charts).resolve_scale(color="independent", x="shared")
-        st.altair_chart(chart, use_container_width=True)
+        chart_placeholder = st.empty()
+        chart_placeholder.altair_chart(chart, use_container_width=True)
 
 def get_plot(var:str, df:pd.DataFrame):
     """

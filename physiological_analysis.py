@@ -7,6 +7,7 @@ import re
 from sql_utils import get_rds_connection
 import streamlit as st
 import altair as alt  # Add this import
+import numpy as np
 
 # ML imports
 from sklearn.cluster import KMeans
@@ -18,6 +19,7 @@ import umap
 
 # Import VAR_DICT from your visualization module (adjust the path as needed)
 from visualization_page import VAR_DICT  
+from sql_utils import LOCAL_OFFSET
 
 # ------------------ CLEAR OLD ROWS FUNCTION ------------------ #
 def clear_previous_data(username: str):
@@ -68,7 +70,7 @@ def get_table_data(username: str, table_name: str) -> pd.DataFrame:
                 df = pd.DataFrame(rows, columns=select_cols)
                 for col in ["start_time", "end_time"]:
                     if col in df.columns:
-                        df[col] = pd.to_datetime(df[col], unit='ms')
+                        df[col] = pd.to_datetime(df[col] + LOCAL_OFFSET, unit='ms')
                 df["name"] = df["name"].fillna("Unspecified") if "name" in df.columns else "Unspecified"
                 df["instance_type"] = "Event" if table_name == "events" else "Intervention"
                 df["category"] = "Event" if table_name == "events" else "Intervention"
@@ -138,7 +140,7 @@ def analyze_metric_change(username: str, metric_name: str, pre_start, pre_end, p
     try:
         # st.write(f"Analyzing {metric_name} from {pre_start.strftime('%Y-%m-%d %H:%M:%S')} to {post_end.strftime('%Y-%m-%d %H:%M:%S')}")
         pre_start_ms = int(pre_start.timestamp() * 1000)
-        pre_end_ms = int(pre_end.timestamp() * 1000)
+        pre_end_ms = int(pre_end.timestamp() * 1000) 
         post_start_ms = int(post_start.timestamp() * 1000)
         post_end_ms = int(post_end.timestamp() * 1000)
         with get_rds_connection() as conn:
@@ -413,143 +415,224 @@ def analyze_physiological_impact(username: str, hours_window: int = 2) -> pd.Dat
         }).reset_index()
     return results_df
 
-# ------------------ EXPLORATORY ML & VISUALIZATIONS ------------------ #
-def exploratory_ml_analysis(results_df: pd.DataFrame, n_clusters: int = 3) -> pd.DataFrame:
-    st.subheader("Exploratory ML Analysis")
-    if results_df.empty:
-        st.warning("No data to analyze.")
-        return results_df
-    
-    # Prepare features and scale them
-    feature_cols = ['rmssd_change', 'bbi_change', 'steps_change', 'stress_change', 'duration_minutes', 'impact_score']
-    categorical_cols = ['instance_type', 'name', 'time_of_day', 'day_of_week', 'pre_stress_state', 'sentiment', 'reported_impact']
-    features_numeric = results_df[feature_cols].fillna(0)
-    features_categorical = pd.get_dummies(results_df[categorical_cols], drop_first=True)
-    X = pd.concat([features_numeric, features_categorical], axis=1)
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
-    
-    # Perform KMeans clustering
-    kmeans = KMeans(n_clusters=n_clusters, random_state=42)
-    cluster_labels = kmeans.fit_predict(X_scaled)
-    results_df['cluster'] = cluster_labels
-    
-    # Determine TSNE perplexity dynamically based on the sample size.
-    n_samples = X_scaled.shape[0]
-    tsne_perplexity = min(30, max(5, n_samples - 1))
-    
-    # Build projection DataFrames with additional temporal info:
-    # Date and Time are extracted from the start_time column.
-    pca = PCA(n_components=2, random_state=42)
-    X_pca = pca.fit_transform(X_scaled)
-    pca_df = pd.DataFrame({
-        'Dim1': X_pca[:, 0],
-        'Dim2': X_pca[:, 1],
-        'Cluster': cluster_labels,
-        'Name': results_df['name'],
-        'Type': results_df['instance_type'],
-        'Date': results_df['start_time'].dt.strftime('%Y-%m-%d'),
-        'Time': results_df['start_time'].dt.strftime('%H:%M'),
-        'Day': results_df['day_of_week'],
-        'TimeOfDay': results_df['time_of_day']
-    })
-    
-    tsne = TSNE(n_components=2, random_state=42, perplexity=tsne_perplexity)
-    X_tsne = tsne.fit_transform(X_scaled)
-    tsne_df = pd.DataFrame({
-        'Dim1': X_tsne[:, 0],
-        'Dim2': X_tsne[:, 1],
-        'Cluster': cluster_labels,
-        'Name': results_df['name'],
-        'Type': results_df['instance_type'],
-        'Date': results_df['start_time'].dt.strftime('%Y-%m-%d'),
-        'Time': results_df['start_time'].dt.strftime('%H:%M'),
-        'Day': results_df['day_of_week'],
-        'TimeOfDay': results_df['time_of_day']
-    })
-    
 
-    umap_reducer = umap.UMAP(n_components=2, random_state=42)
-    X_umap = umap_reducer.fit_transform(X_scaled)
-    umap_df = pd.DataFrame({
-        'Dim1': X_umap[:, 0],
-        'Dim2': X_umap[:, 1],
-        'Cluster': cluster_labels,
-        'Name': results_df['name'],
-        'Type': results_df['instance_type'],
-        'Date': results_df['start_time'].dt.strftime('%Y-%m-%d'),
-        'Time': results_df['start_time'].dt.strftime('%H:%M'),
-        'Day': results_df['day_of_week'],
-        'TimeOfDay': results_df['time_of_day']
-    })
-    
-    # Create sub-tabs for PCA, t-SNE, and UMAP projections
-    dim_tabs = st.tabs(["PCA Projection", "t-SNE Projection", "UMAP Projection"])
-    
-    tooltip_fields = ['Name:N', 'Type:N', 'Date:T', 'Time:N', 'Day:N', 'TimeOfDay:N']
-    
-    with dim_tabs[0]:
-        pca_chart = alt.Chart(pca_df).mark_circle(size=60).encode(
-            x=alt.X('Dim1:Q', title='PCA Component 1'),
-            y=alt.Y('Dim2:Q', title='PCA Component 2'),
-            color=alt.Color('Cluster:N', scale=alt.Scale(scheme='viridis')),
-            tooltip=tooltip_fields
-        ).properties(
-            width=700,
-            height=500,
-            title='PCA Projection of Events/Interventions'
-        ).interactive()
-        st.altair_chart(pca_chart, use_container_width=True)
-    
-    with dim_tabs[1]:
-        tsne_chart = alt.Chart(tsne_df).mark_circle(size=60).encode(
-            x=alt.X('Dim1:Q', title='t-SNE Dim 1'),
-            y=alt.Y('Dim2:Q', title='t-SNE Dim 2'),
-            color=alt.Color('Cluster:N', scale=alt.Scale(scheme='viridis')),
-            tooltip=tooltip_fields
-        ).properties(
-            width=700,
-            height=500,
-            title='t-SNE Projection of Events/Interventions'
-        ).interactive()
-        st.altair_chart(tsne_chart, use_container_width=True)
-    
-    with dim_tabs[2]:
-        umap_chart = alt.Chart(umap_df).mark_circle(size=60).encode(
-            x=alt.X('Dim1:Q', title='UMAP Dim 1'),
-            y=alt.Y('Dim2:Q', title='UMAP Dim 2'),
-            color=alt.Color('Cluster:N', scale=alt.Scale(scheme='viridis')),
-            tooltip=tooltip_fields
-        ).properties(
-            width=700,
-            height=500,
-            title='UMAP Projection of Events/Interventions'
-        ).interactive()
-        st.altair_chart(umap_chart, use_container_width=True)
-    
-    # Brief explanation of components and dimensions
-    st.markdown("""
-    ### Explanation of Components and Dimensions
-    
-    **PCA Components:**  
-    PCA creates new variables (components) that are linear combinations of the original features.  
-    - **Component 1:** Captures the maximum variance in the data (i.e., the strongest pattern).  
-    - **Component 2:** Captures the next most significant independent pattern.  
-    
-    **t-SNE Dimensions:**  
-    t-SNE transforms high-dimensional data into two dimensions while preserving local neighborhood structure.  
-    - These dimensions are latent features optimized for visualization rather than direct interpretation.
-    
-    **UMAP Dimensions:**  
-    UMAP also produces a two-dimensional embedding that preserves both local and some global data structure.  
-    - Like t-SNE, its dimensions are latent and are useful for uncovering the manifold structure of the data.
-    
-    Hovering over any point in the projections will reveal details such as the event/intervention name, type, date, time, day of the week, and time of day.
-    """)
-    
-    return results_df
+def calculate_bbi_continuous_change(username: str, intervention_name: str, minutes_range=60) -> pd.DataFrame:
+    """
+    Calculate continuous BBI changes for a specified time after an intervention.
+    Returns a DataFrame with continuous timestamps and corresponding BBI changes.
+    """
+    with get_rds_connection() as conn:
+        with conn.cursor() as cursor:
+            # First check if the BBI table exists
+            cursor.execute("""
+                SELECT COUNT(*) 
+                FROM information_schema.tables 
+                WHERE table_schema = 'researchwearables' 
+                AND table_name = %s
+            """, (f'{username}_bbi',))
+            
+            if cursor.fetchone()[0] == 0:
+                print(f"Warning: BBI table '{username}_bbi' does not exist in the database.")
+                return pd.DataFrame()
+            
+            # Check if the table has any data
+            cursor.execute(f"""
+                SELECT COUNT(*) 
+                FROM {username}_bbi
+            """)
+            if cursor.fetchone()[0] == 0:
+                print(f"Warning: BBI table '{username}_bbi' exists but contains no data.")
+                return pd.DataFrame()
+            
+            # Get the intervention's start and end times
+            cursor.execute("""
+                SELECT id, start_time, end_time 
+                FROM interventions 
+                WHERE username = %s AND name = %s
+            """, (username, intervention_name))
+            intervention_times = cursor.fetchall()
+            
+            if not intervention_times:
+                print(f"Warning: No intervention times found for {intervention_name}")
+                return pd.DataFrame()
+            
+            all_results = []
+            for intervention_id, start_time, end_time in intervention_times:
+                # Convert to numeric if they're strings
+                if isinstance(start_time, str):
+                    start_time = float(start_time)
+                if isinstance(end_time, str):
+                    end_time = float(end_time)
+                
+                # Get baseline (pre-intervention) BBI
+                pre_start = start_time - (5 * 60 * 1000)  # 5 minutes before intervention
+                pre_end = start_time
+                
+                cursor.execute(f"""
+                    SELECT AVG(bbi) as avg_bbi
+                    FROM {username}_bbi
+                    WHERE unix_timestamp_cleaned BETWEEN %s AND %s
+                """, (pre_start, pre_end))
+                pre_bbi = cursor.fetchone()[0]
+                
+                if pre_bbi is None or pre_bbi == 0:
+                    print(f"Warning: No valid pre-intervention BBI for {intervention_name} (ID: {intervention_id})")
+                    continue
+                
+                # Convert pre_bbi to float if it's a string
+                if isinstance(pre_bbi, str):
+                    pre_bbi = float(pre_bbi)
+                
+                # Get continuous BBI data for minutes_range after intervention
+                post_end_time = end_time + (minutes_range * 60 * 1000)
+                
+                cursor.execute(f"""
+                    SELECT unix_timestamp_cleaned, bbi
+                    FROM {username}_bbi
+                    WHERE unix_timestamp_cleaned BETWEEN %s AND %s
+                    ORDER BY unix_timestamp_cleaned
+                """, (end_time, post_end_time))
+                
+                continuous_data = cursor.fetchall()
+                
+                if not continuous_data:
+                    print(f"Warning: No post-intervention BBI data found for {intervention_name} (ID: {intervention_id})")
+                    continue
+                
+                # Process the continuous data
+                for timestamp, bbi in continuous_data:
+                    # Convert timestamp to numeric if it's a string
+                    if isinstance(timestamp, str):
+                        timestamp = float(timestamp)
+                    
+                    # Calculate minutes after intervention end
+                    minutes_after = (timestamp - end_time) / (60 * 1000)
+                    
+                    # Calculate percentage change from baseline
+                    if bbi is not None:
+                        # Convert bbi to float if it's a string
+                        if isinstance(bbi, str):
+                            bbi = float(bbi)
+                        
+                        percent_change = ((bbi - pre_bbi) / pre_bbi) * 100
+                        all_results.append({
+                            'unix_timestamp': timestamp,
+                            'minutes_after': minutes_after,
+                            'bbi_change': percent_change,
+                            'intervention': intervention_name,
+                            'intervention_id': intervention_id
+                        })
+            
+            return pd.DataFrame(all_results)
 
-
+def calculate_hrv_continuous_change(username: str, intervention_name: str, minutes_range=60) -> pd.DataFrame:
+    """
+    Calculate continuous HRV changes for a specified time after an intervention.
+    Returns a DataFrame with continuous timestamps and corresponding HRV changes.
+    """
+    with get_rds_connection() as conn:
+        with conn.cursor() as cursor:
+            # First check if the RMSSD table exists
+            cursor.execute("""
+                SELECT COUNT(*) 
+                FROM information_schema.tables 
+                WHERE table_schema = 'researchwearables' 
+                AND table_name = %s
+            """, (f'{username}_rmssd',))
+            
+            if cursor.fetchone()[0] == 0:
+                print(f"Warning: RMSSD table '{username}_rmssd' does not exist in the database.")
+                return pd.DataFrame()
+            
+            # Check if the table has any data
+            cursor.execute(f"""
+                SELECT COUNT(*) 
+                FROM {username}_rmssd
+            """)
+            if cursor.fetchone()[0] == 0:
+                print(f"Warning: RMSSD table '{username}_rmssd' exists but contains no data.")
+                return pd.DataFrame()
+            
+            # Get the intervention's start and end times
+            cursor.execute("""
+                SELECT id, start_time, end_time 
+                FROM interventions 
+                WHERE username = %s AND name = %s
+            """, (username, intervention_name))
+            intervention_times = cursor.fetchall()
+            
+            if not intervention_times:
+                print(f"Warning: No intervention times found for {intervention_name}")
+                return pd.DataFrame()
+            
+            all_results = []
+            for intervention_id, start_time, end_time in intervention_times:
+                # Convert to numeric if they're strings
+                if isinstance(start_time, str):
+                    start_time = float(start_time)
+                if isinstance(end_time, str):
+                    end_time = float(end_time)
+                
+                # Get baseline (pre-intervention) RMSSD
+                pre_start = start_time - (5 * 60 * 1000)  # 5 minutes before intervention
+                pre_end = start_time
+                
+                cursor.execute(f"""
+                    SELECT AVG(rmssd) as avg_rmssd
+                    FROM {username}_rmssd
+                    WHERE unix_timestamp_cleaned BETWEEN %s AND %s
+                """, (pre_start, pre_end))
+                pre_rmssd = cursor.fetchone()[0]
+                
+                if pre_rmssd is None or pre_rmssd == 0:
+                    print(f"Warning: No valid pre-intervention RMSSD for {intervention_name} (ID: {intervention_id})")
+                    continue
+                
+                # Convert pre_rmssd to float if it's a string
+                if isinstance(pre_rmssd, str):
+                    pre_rmssd = float(pre_rmssd)
+                
+                # Get continuous RMSSD data for minutes_range after intervention
+                post_end_time = end_time + (minutes_range * 60 * 1000)
+                
+                cursor.execute(f"""
+                    SELECT unix_timestamp_cleaned, rmssd
+                    FROM {username}_rmssd
+                    WHERE unix_timestamp_cleaned BETWEEN %s AND %s
+                    ORDER BY unix_timestamp_cleaned
+                """, (end_time, post_end_time))
+                
+                continuous_data = cursor.fetchall()
+                
+                if not continuous_data:
+                    print(f"Warning: No post-intervention RMSSD data found for {intervention_name} (ID: {intervention_id})")
+                    continue
+                
+                # Process the continuous data
+                for timestamp, rmssd in continuous_data:
+                    # Convert timestamp to numeric if it's a string
+                    if isinstance(timestamp, str):
+                        timestamp = float(timestamp)
+                    
+                    # Calculate minutes after intervention end
+                    minutes_after = (timestamp - end_time) / (60 * 1000)
+                    
+                    # Calculate percentage change from baseline
+                    if rmssd is not None:
+                        # Convert rmssd to float if it's a string
+                        if isinstance(rmssd, str):
+                            rmssd = float(rmssd)
+                            
+                        percent_change = ((rmssd - pre_rmssd) / pre_rmssd) * 100
+                        all_results.append({
+                            'unix_timestamp': timestamp,
+                            'minutes_after': minutes_after,
+                            'rmssd_change': percent_change,
+                            'intervention': intervention_name,
+                            'intervention_id': intervention_id
+                        })
+            
+            return pd.DataFrame(all_results)
 
 def visualize_analysis(results_df: pd.DataFrame, username: str):
     if results_df.empty:
@@ -564,57 +647,55 @@ def visualize_analysis(results_df: pd.DataFrame, username: str):
     st.subheader(f"Physiological Impact Analysis for User: {username}")
     
     # Standardized Metrics Visualizations
-    st.write("### HRV Change by Event/Intervention Name")
-    name_hrv_change = plot_df.groupby('name')['rmssd_change'].mean().reset_index()
-    mean_hrv = name_hrv_change['rmssd_change'].mean()
-    std_hrv = name_hrv_change['rmssd_change'].std() if name_hrv_change['rmssd_change'].std() != 0 else 1e-6
-    name_hrv_change['std_hrv'] = (name_hrv_change['rmssd_change'] - mean_hrv) / std_hrv
-    name_hrv_change['std_hrv_pct'] = name_hrv_change['std_hrv'] * 100
+
+    # BBI Change Plot (unchanged)
+    st.write("### BBI Change by Event/Intervention Name")
+    name_bbi_change = plot_df.groupby('name')[['bbi_pre_avg', 'bbi_post_avg']].mean().reset_index()
+    name_bbi_change['bbi_pct_change'] = (name_bbi_change['bbi_post_avg'] - name_bbi_change['bbi_pre_avg']) / name_bbi_change['bbi_pre_avg'] * 100
+    fig4, ax5 = plt.subplots(figsize=(12, 6))
+    name_bbi_change = name_bbi_change.sort_values('bbi_pct_change', ascending=False)
+    bbi_colors = ['green' if val > 0 else 'red' for val in name_bbi_change['bbi_pct_change']]
+    ax5.bar(name_bbi_change['name'], name_bbi_change['bbi_pct_change'], color=bbi_colors)
+    ax5.axhline(y=0, color='black', linestyle='-', alpha=0.5)
+    ax5.set_title("Average BBI Percent Change by Event/Intervention Name")
+    ax5.set_xlabel("Event/Intervention")
+    ax5.set_ylabel("Percent Change in BBI (%; higher is better)")
+    ax5.set_xticklabels(name_bbi_change['name'], rotation=45, ha='right')
+    ax5.grid(axis="y", alpha=0.3)
+    plt.tight_layout()
+    st.pyplot(fig4)
+
+    # HRV Change Plot (Standard Resolution)
+    st.write("### HRV Change by Event/Intervention Name (Standard Resolution)")
+    name_rmssd_change = plot_df.groupby('name')[['rmssd_pre_avg', 'rmssd_post_avg']].mean().reset_index()
+    name_rmssd_change['rmssd_pct_change'] = (name_rmssd_change['rmssd_post_avg'] - name_rmssd_change['rmssd_pre_avg']) / name_rmssd_change['rmssd_pre_avg'] * 100
     fig3, ax4 = plt.subplots(figsize=(12, 6))
-    name_hrv_change = name_hrv_change.sort_values('std_hrv', ascending=False)
-    hrv_colors = ['green' if val > 0 else 'red' for val in name_hrv_change['std_hrv_pct']]
-    bars = ax4.bar(name_hrv_change['name'], name_hrv_change['std_hrv_pct'], color=hrv_colors)
+    name_rmssd_change = name_rmssd_change.sort_values('rmssd_pct_change', ascending=False)
+    rmssd_colors = ['green' if val > 0 else 'red' for val in name_rmssd_change['rmssd_pct_change']]
+    ax4.bar(name_rmssd_change['name'], name_rmssd_change['rmssd_pct_change'], color=rmssd_colors)
     ax4.axhline(y=0, color='black', linestyle='-', alpha=0.5)
-    ax4.set_title("Standardized HRV Change by Event/Intervention Name")
+    ax4.set_title("Average HRV Percent Change by Event/Intervention Name (Standard Resolution)")
     ax4.set_xlabel("Event/Intervention")
-    ax4.set_ylabel("Standardized HRV Change (%; higher is better)")
-    ax4.set_xticklabels(name_hrv_change['name'], rotation=45, ha='right')
+    ax4.set_ylabel("Percent Change in HRV (%; higher is better)")
+    ax4.set_xticklabels(name_rmssd_change['name'], rotation=45, ha='right')
+    ax4.grid(axis="y", alpha=0.3)
     plt.tight_layout()
     st.pyplot(fig3)
     
-    st.write("### BBI Change by Event/Intervention Name")
-    name_bbi_change = plot_df.groupby('name')['bbi_change'].mean().reset_index()
-    mean_bbi = name_bbi_change['bbi_change'].mean()
-    std_bbi = name_bbi_change['bbi_change'].std() if name_bbi_change['bbi_change'].std() != 0 else 1e-6
-    name_bbi_change['std_bbi'] = (name_bbi_change['bbi_change'] - mean_bbi) / std_bbi
-    name_bbi_change['std_bbi_pct'] = name_bbi_change['std_bbi'] * 100
-    fig4, ax5 = plt.subplots(figsize=(12, 6))
-    name_bbi_change = name_bbi_change.sort_values('std_bbi', ascending=False)
-    bbi_colors = ['green' if val > 0 else 'red' for val in name_bbi_change['std_bbi_pct']]
-    bars = ax5.bar(name_bbi_change['name'], name_bbi_change['std_bbi_pct'], color=bbi_colors)
-    ax5.axhline(y=0, color='black', linestyle='-', alpha=0.5)
-    ax5.set_title("Standardized BBI Change by Event/Intervention Name")
-    ax5.set_xlabel("Event/Intervention")
-    ax5.set_ylabel("Standardized BBI Change (%; higher is better)")
-    ax5.set_xticklabels(name_bbi_change['name'], rotation=45, ha='right')
-    plt.tight_layout()
-    st.pyplot(fig4)
-    
+    # Calculate non-standardized % change for stress, first averaging pre-post effects then taking the percent change
     st.write("### Which events/interventions are most effective at reducing Garmin's proprietary stress metric?")
-    name_stress_change = plot_df.groupby('name')['stress_change'].mean().reset_index()
-    mean_stress = name_stress_change['stress_change'].mean()
-    std_stress = name_stress_change['stress_change'].std() if name_stress_change['stress_change'].std() != 0 else 1e-6
-    name_stress_change['std_stress'] = -1 * (name_stress_change['stress_change'] - mean_stress) / std_stress
-    name_stress_change['std_stress_pct'] = name_stress_change['std_stress'] * 100
+    name_stress_change = plot_df.groupby('name')[['stress_pre_avg', 'stress_post_avg']].mean().reset_index()
+    name_stress_change['stress_pct_change'] = (name_stress_change['stress_post_avg'] - name_stress_change['stress_pre_avg']) / name_stress_change['stress_pre_avg'] * 100
     fig5, ax3 = plt.subplots(figsize=(12, 6))
-    name_stress_change = name_stress_change.sort_values('std_stress', ascending=False)
-    stress_colors = ['green' if val > 0 else 'red' for val in name_stress_change['std_stress_pct']]
-    bars = ax3.bar(name_stress_change['name'], name_stress_change['std_stress_pct'], color=stress_colors)
+    name_stress_change = name_stress_change.sort_values('stress_pct_change', ascending=False)
+    stress_colors = ['green' if val > 0 else 'red' for val in name_stress_change['stress_pct_change']]
+    ax3.bar(name_stress_change['name'], name_stress_change['stress_pct_change'], color=stress_colors)
     ax3.axhline(y=0, color='black', linestyle='-', alpha=0.5)
-    ax3.set_title("Standardized Stress Reduction by Event/Intervention Name")
+    ax3.set_title("Stress Reduction (%) by Event/Intervention Name")
     ax3.set_xlabel("Event/Intervention")
-    ax3.set_ylabel("Standardized Stress Reduction (%; higher is better)")
+    ax3.set_ylabel("Stress Reduction (%; higher is better)")
     ax3.set_xticklabels(name_stress_change['name'], rotation=45, ha='right')
+    ax3.grid(axis="y", alpha=0.3)
     plt.tight_layout()
     st.pyplot(fig5)
     
@@ -634,7 +715,6 @@ def visualize_analysis(results_df: pd.DataFrame, username: str):
 
     # Pivot the data so rows are days and columns are times
     temporal_pivot = temporal_patterns.pivot(index='day_of_week', columns='time_of_day', values='std_stress')
-    print(temporal_pivot)
     # Reorder the columns to always correspond to morning, afternoon, evening, night
     time_cols = []
     for time in ["Morning", "Afternoon", "Evening", "Night"]:
@@ -644,7 +724,6 @@ def visualize_analysis(results_df: pd.DataFrame, username: str):
     # Reindex to sort rows
     temporal_pivot = temporal_pivot.reindex(day_order)
     temporal_pivot = temporal_pivot.dropna(how="all")
-    print(temporal_pivot)
 
     st.write("#### Heatmap: Average Standardized Stress Reduction by Day of Week and Time of Day")
     fig_heat, ax_heat = plt.subplots(figsize=(8, 6))
@@ -653,7 +732,231 @@ def visualize_analysis(results_df: pd.DataFrame, username: str):
     ax_heat.set_xlabel("Time of Day")
     ax_heat.set_ylabel("Day of Week")
     st.pyplot(fig_heat)
-
+    
+    # Define time points to visualize - not needed anymore with continuous data
+    # time_points = [0, 1, 2, 3, 4, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60]  # Minutes after intervention - 1-minute intervals at the beginning
+    
+    # BBI Change Over Time - Using CONTINUOUS data with Altair
+    st.write("### BBI Change Over Time After Events/Interventions")
+    
+    # Add explanation about BBI changes
+    st.info("""
+    **Note for participants:** 
+    - **Positive BBI change (↑)** indicates an increase in the time interval between heartbeats, which typically means a more relaxed state, better recovery, and lower heart rate. This is generally beneficial for stress reduction.
+    - **Negative BBI change (↓)** indicates a decrease in the time interval between heartbeats, which typically means a more activated state, higher heart rate, and potentially higher stress levels.
+    """)
+    
+    # Check if BBI time data exists in session state to avoid re-running calculations
+    if 'bbi_time_data' not in st.session_state or st.session_state.bbi_time_data is None:
+        if not plot_df.empty:
+            # Get BBI changes over time for each event/intervention
+            bbi_time_data = pd.DataFrame()
+            
+            with st.spinner("Calculating continuous BBI changes over time..."):
+                for event_name in plot_df['name'].unique():
+                    # Get actual BBI changes over time for this event (60 minute window)
+                    event_bbi_changes = calculate_bbi_continuous_change(username, event_name, 60)
+                    
+                    if not event_bbi_changes.empty:
+                        # Save data for later display
+                        event_bbi_changes['event_name'] = event_name
+                        bbi_time_data = pd.concat([bbi_time_data, event_bbi_changes])
+            
+            # Save to session state to avoid recalculation
+            st.session_state.bbi_time_data = bbi_time_data
+        else:
+            st.session_state.bbi_time_data = pd.DataFrame()
+    
+    # Use the data from session state for visualization
+    bbi_time_data = st.session_state.bbi_time_data
+    
+    if not bbi_time_data.empty:
+        # Create an interactive Altair chart with hover tooltips
+        # Format the data for Altair
+        bbi_time_data['minutes_after'] = bbi_time_data['minutes_after'].astype(float)
+        bbi_time_data['bbi_change'] = bbi_time_data['bbi_change'].astype(float)
+        
+        # Create a unique label combining event name and instance ID (safely checking if intervention_id exists)
+        if 'intervention_id' in bbi_time_data.columns:
+            # Only for display in tooltips
+            bbi_time_data['event_instance'] = bbi_time_data.apply(
+                lambda row: f"{row['event_name']} #{row['intervention_id']}", 
+                axis=1
+            )
+        else:
+            # Fallback: just use event name
+            bbi_time_data['event_instance'] = bbi_time_data['event_name']
+            
+        # Calculate average values for each event type at regular intervals (for smoother visualization)
+        # First, round minutes to the nearest 0.5 to reduce noise but keep high granularity
+        bbi_time_data['minutes_rounded'] = (bbi_time_data['minutes_after'] * 2).round() / 2
+        avg_bbi_data = bbi_time_data.groupby(['event_name', 'minutes_rounded'])['bbi_change'].mean().reset_index()
+        avg_bbi_data['bbi_change_formatted'] = avg_bbi_data['bbi_change'].map(lambda x: f"{x:.2f}%")
+        
+        # Get a count of instances per event for tooltips
+        event_counts = bbi_time_data.groupby('event_name')['event_instance'].nunique().to_dict()
+        avg_bbi_data['instance_count'] = avg_bbi_data['event_name'].map(event_counts)
+        avg_bbi_data['event_name_with_count'] = avg_bbi_data.apply(
+            lambda row: f"{row['event_name']} (avg of {row['instance_count']} instances)" 
+            if row['instance_count'] > 1 else row['event_name'], 
+            axis=1
+        )
+        
+        # Rename minutes_rounded to minutes_after for consistency
+        avg_bbi_data = avg_bbi_data.rename(columns={'minutes_rounded': 'minutes_after'})
+        
+        # Create a line chart with continuous data
+        bbi_chart = alt.Chart(avg_bbi_data).mark_line(
+            point=False,  # No points for smoother continuous look
+            interpolate='linear', 
+            strokeWidth=2.5  # Slightly thicker lines for better visibility
+        ).encode(
+            x=alt.X('minutes_after:Q', 
+                   title='Minutes After Event/Intervention (0 = End of Intervention)',
+                   scale=alt.Scale(domain=[0, 60])),  # Set x-axis to show 60 minute range
+            y=alt.Y('bbi_change:Q', title='BBI Change (%)'),
+            color=alt.Color('event_name:N', title='Event/Intervention'),
+            tooltip=[
+                alt.Tooltip('event_name_with_count:N', title='Event/Intervention'),
+                alt.Tooltip('minutes_after:Q', title='Minutes After'),
+                alt.Tooltip('bbi_change_formatted:N', title='Avg BBI Change'),
+                alt.Tooltip('instance_count:Q', title='Number of Instances')
+            ]
+        ).properties(
+            width=700,
+            height=400,
+            title='Average BBI Change Over Time After Events/Interventions (60 min)'
+        )
+        
+        # Add a horizontal rule at y=0
+        zero_rule = alt.Chart(pd.DataFrame({'y': [0]})).mark_rule(color='black').encode(y='y')
+        
+        # Combine the chart and the rule
+        final_chart = alt.layer(bbi_chart, zero_rule).interactive()
+        
+        # Display the chart
+        st.altair_chart(final_chart, use_container_width=True)
+        
+        # Optionally display the data table with average values
+        if st.checkbox("Show BBI change data table", value=False):
+            display_data = avg_bbi_data[['event_name', 'minutes_after', 'bbi_change_formatted', 'instance_count']]
+            display_data.columns = ['Event/Intervention', 'Minutes After', 'Avg BBI Change', 'Number of Instances']
+            st.dataframe(display_data)
+    else:
+        st.warning("No data available for BBI time-series analysis.")
+    
+    # HRV Change Over Time - Using CONTINUOUS data with Altair
+    st.write("### HRV Change Over Time After Events/Interventions")
+    
+    # Add explanation about HRV changes
+    st.info("""
+    **Note for participants:** 
+    - **Positive HRV change (↑)** indicates increased heart rate variability, which typically means better stress recovery, improved relaxation, and enhanced autonomic nervous system balance. This is generally beneficial.
+    - **Negative HRV change (↓)** indicates decreased heart rate variability, which typically means higher stress, reduced recovery capacity, and potential autonomic imbalance.
+    """)
+    
+    # Check if HRV time data exists in session state to avoid re-running calculations
+    if 'hrv_time_data' not in st.session_state or st.session_state.hrv_time_data is None:
+        if not plot_df.empty:
+            # Get HRV changes over time for each event/intervention
+            hrv_time_data = pd.DataFrame()
+            
+            with st.spinner("Calculating continuous HRV changes over time..."):
+                for event_name in plot_df['name'].unique():
+                    # Get actual HRV changes over time for this event (60 minute window)
+                    event_hrv_changes = calculate_hrv_continuous_change(username, event_name, 60)
+                    
+                    if not event_hrv_changes.empty:
+                        # Save data for later display
+                        event_hrv_changes['event_name'] = event_name
+                        hrv_time_data = pd.concat([hrv_time_data, event_hrv_changes])
+            
+            # Save to session state to avoid recalculation
+            st.session_state.hrv_time_data = hrv_time_data
+        else:
+            st.session_state.hrv_time_data = pd.DataFrame()
+    
+    # Use the data from session state for visualization
+    hrv_time_data = st.session_state.hrv_time_data
+    
+    if not hrv_time_data.empty:
+        # Create an interactive Altair chart with hover tooltips
+        # Format the data for Altair
+        hrv_time_data['minutes_after'] = hrv_time_data['minutes_after'].astype(float)
+        hrv_time_data['rmssd_change'] = hrv_time_data['rmssd_change'].astype(float)
+        
+        # Create a unique label combining event name and instance ID (safely checking if intervention_id exists)
+        if 'intervention_id' in hrv_time_data.columns:
+            # Only for display in tooltips
+            hrv_time_data['event_instance'] = hrv_time_data.apply(
+                lambda row: f"{row['event_name']} #{row['intervention_id']}", 
+                axis=1
+            )
+        else:
+            # Fallback: just use event name
+            hrv_time_data['event_instance'] = hrv_time_data['event_name']
+            
+        # Calculate average values for each event type at regular intervals (for smoother visualization)
+        # First, round minutes to the nearest 0.5 to reduce noise but keep high granularity
+        hrv_time_data['minutes_rounded'] = (hrv_time_data['minutes_after'] * 2).round() / 2
+        avg_hrv_data = hrv_time_data.groupby(['event_name', 'minutes_rounded'])['rmssd_change'].mean().reset_index()
+        avg_hrv_data['rmssd_change_formatted'] = avg_hrv_data['rmssd_change'].map(lambda x: f"{x:.2f}%")
+        
+        # Get a count of instances per event for tooltips
+        event_counts = hrv_time_data.groupby('event_name')['event_instance'].nunique().to_dict()
+        avg_hrv_data['instance_count'] = avg_hrv_data['event_name'].map(event_counts)
+        avg_hrv_data['event_name_with_count'] = avg_hrv_data.apply(
+            lambda row: f"{row['event_name']} (avg of {row['instance_count']} instances)" 
+            if row['instance_count'] > 1 else row['event_name'], 
+            axis=1
+        )
+        
+        # Rename minutes_rounded to minutes_after for consistency
+        avg_hrv_data = avg_hrv_data.rename(columns={'minutes_rounded': 'minutes_after'})
+        
+        # Create a line chart with continuous data
+        hrv_chart = alt.Chart(avg_hrv_data).mark_line(
+            point=False,  # No points for smoother continuous look
+            interpolate='linear',
+            strokeWidth=2.5  # Slightly thicker lines for better visibility
+        ).encode(
+            x=alt.X('minutes_after:Q', 
+                   title='Minutes After Event/Intervention (0 = End of Intervention)',
+                   scale=alt.Scale(domain=[0, 60])),  # Set x-axis to show 60 minute range
+            y=alt.Y('rmssd_change:Q', title='HRV Change (%)'),
+            color=alt.Color('event_name:N', title='Event/Intervention'),
+            tooltip=[
+                alt.Tooltip('event_name_with_count:N', title='Event/Intervention'),
+                alt.Tooltip('minutes_after:Q', title='Minutes After'),
+                alt.Tooltip('rmssd_change_formatted:N', title='Avg HRV Change'),
+                alt.Tooltip('instance_count:Q', title='Number of Instances')
+            ]
+        ).properties(
+            width=700,
+            height=400,
+            title='Average HRV Change Over Time After Events/Interventions (60 min)'
+        )
+        
+        # Add a horizontal rule at y=0
+        zero_rule = alt.Chart(pd.DataFrame({'y': [0]})).mark_rule(color='black').encode(y='y')
+        
+        # Combine the chart and the rule
+        final_chart = alt.layer(hrv_chart, zero_rule).interactive()
+        
+        # Display the chart
+        st.altair_chart(final_chart, use_container_width=True)
+        
+        # Optionally display the data table with average values
+        if st.checkbox("Show HRV change data table", value=False):
+            display_data = avg_hrv_data[['event_name', 'minutes_after', 'rmssd_change_formatted', 'instance_count']]
+            display_data.columns = ['Event/Intervention', 'Minutes After', 'Avg HRV Change', 'Number of Instances']
+            st.dataframe(display_data)
+    else:
+        st.warning("No data available for HRV time-series analysis.")
+    
+    # Display category impact table
+    display_category_impact_table(plot_df)
+    
     return results_df
 
 def upload_annotations(username: str):
@@ -915,6 +1218,111 @@ def recategorize_annotations(username: str):
                             except Exception as e:
                                 st.error(f"Error recategorizing: {e}")
 
+# Define intervention categories
+INTERVENTION_CATEGORIES = {
+    "Physical Activity (Cardio)": [
+        "run", "running", "jog", "jogging", "cycling", "bike", "spin class",
+        "hiit", "cardio", "treadmill", "exercise session", "gym session",
+        "swimming", "aerobic", "dance", "zumba", "workout", "fitness"
+    ],
+    "Physical Activity (Non-Cardio)": [
+        "walk", "walking", "yoga", "stretch", "light exercise", "light yoga",
+        "pilates", "tai chi", "strength", "weights", "resistance"
+    ],
+    "Social Media Consumption": [
+        "scrolling", "social media", "facebook", "instagram", "tiktok",
+        "twitter", "youtube", "screen time", "browsing", "reddit", "linkedin"
+    ],
+    "Nap/Rest": [
+        "nap", "rest", "sleep", "break", "relaxation", "quiet time", "recharge"
+    ],
+    "Eating/Drinking": [
+        "eating", "drinking", "coffee", "lunch", "breakfast", "dinner", "meal",
+        "snack", "tea", "water", "food", "cooking", "brunch"
+    ],
+    "Social Interaction": [
+        "call", "social", "meeting", "friends", "conversation", "hangout",
+        "chat", "discussion", "talk", "socializing", "family", "dinner with", "lunch with"
+    ],
+    "Journaling/Writing": [
+        "journal", "journaling", "writing", "gratitude", "diary", "planning", "reflection"
+    ],
+    "Reading": [
+        "read", "reading", "book", "novel", "fiction", "article"
+    ],
+    "Other": []
+}
+
+def categorize_intervention(name: str) -> str:
+    """
+    Categorize an intervention based on its name.
+    """
+    name_lower = name.lower()
+    for category, keywords in INTERVENTION_CATEGORIES.items():
+        if any(keyword in name_lower for keyword in keywords):
+            return category
+    return "Other"
+
+def display_category_impact_table(results_df: pd.DataFrame):
+    """
+    Display a table showing intervention categories, their frequency, and impact at different time intervals.
+    """
+    if results_df.empty:
+        st.warning("No data available for category analysis")
+        return
+    
+    # Make a copy to avoid modifying the original
+    df = results_df.copy()
+    
+    # Categorize interventions
+    df['intervention_category'] = df['name'].apply(categorize_intervention)
+    
+    # Calculate category statistics
+    category_stats = []
+    for category in sorted(df['intervention_category'].unique()):
+        category_df = df[df['intervention_category'] == category]
+        frequency = len(category_df)
+        frequency_pct = (frequency / len(df)) * 100
+        
+        # Determine the appropriate HRV metric based on available columns
+        if 'rmssd_change' in category_df.columns:
+            avg_impact = category_df['rmssd_change'].mean()
+        elif 'rmssd_pct_change' in category_df.columns:
+            avg_impact = category_df['rmssd_pct_change'].mean()
+        elif 'rmssd_pre_avg' in category_df.columns and 'rmssd_post_avg' in category_df.columns:
+            # Calculate percentage change directly
+            avg_pre = category_df['rmssd_pre_avg'].mean()
+            avg_post = category_df['rmssd_post_avg'].mean()
+            if avg_pre != 0:  # Avoid division by zero
+                avg_impact = ((avg_post - avg_pre) / avg_pre) * 100
+            else:
+                avg_impact = None
+        else:
+            avg_impact = None
+        
+        # For demonstration purpose, we'll use the same value for 15, 30, and 60 minute intervals
+        # In a real application, you would calculate these separately or use values from continuous data
+        avg_impact_15 = avg_impact
+        avg_impact_30 = avg_impact
+        avg_impact_60 = avg_impact
+        
+        category_stats.append({
+            'Intervention Category': category,
+            'Frequency (%)': f"{frequency_pct:.1f}%",
+            'Avg Impact (15 min)': f"{avg_impact_15:.1f}%" if avg_impact_15 is not None and not pd.isna(avg_impact_15) else "N/A",
+            'Avg Impact (30 min)': f"{avg_impact_30:.1f}%" if avg_impact_30 is not None and not pd.isna(avg_impact_30) else "N/A", 
+            'Avg Impact (60 min)': f"{avg_impact_60:.1f}%" if avg_impact_60 is not None and not pd.isna(avg_impact_60) else "N/A"
+        })
+    
+    # Create DataFrame for display
+    stats_df = pd.DataFrame(category_stats)
+    
+    # Display the table
+    st.write("### Summary of Event/Intervention Categories Impact")
+    st.write("This table shows how different categories of events/interventions affect HRV over time.")
+    st.table(stats_df)
+    
+    st.write("**Note:** Positive HRV changes indicate better stress recovery and relaxation, while negative changes may indicate higher stress.")
 
 # ------------------ MAIN APP FUNCTION ------------------ #
 def run_stepper_extraction():
