@@ -26,7 +26,7 @@ def main():
        'Compare Interventions',
        'Calendar Upload',
        'Download Data - Admin',
-       'Feature Extractions - Admin',
+       'Feature Extractions',
        'Upload Data - Admin',
        'Signup - Admin',
    ])
@@ -78,7 +78,7 @@ def main():
            st.warning("You must log in as the admin to access this page.")
            return
        download_user_data()
-   elif page == 'Feature Extractions - Admin':
+   elif page == 'Feature Extractions':
        run_stepper_extraction()  
 
 
