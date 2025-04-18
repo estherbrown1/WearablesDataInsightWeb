@@ -214,14 +214,14 @@ def clean_data(binary_indicator, labfront_exported_data_path):
                 cleaned_df = clean_timestamp_data(combined_df)
                 if folder_name == "bbi":
                     result["rmssd"] = calculate_rmssd(cleaned_df) # Add RMSSD data if BBI data is present
-                    cleaned_df = smooth_data(cleaned_df, folder_name, 180, 90) # Smooth BBI data
+                    cleaned_df = smooth_data(cleaned_df, folder_name, 180, 30) # Smooth BBI data
                 elif folder_name == "step":
                     cleaned_df = cleaned_df[cleaned_df["steps"] != 0] # Drop all records where # of steps did not change
                 result[folder_name] = cleaned_df
 
     return result
 
-def calculate_rmssd(input_df:pd.DataFrame, window_seconds:int=15*60, step_seconds:int=5*60, threshold_seconds:int=30*60, min_valid_count:int=20) -> pd.DataFrame:
+def calculate_rmssd(input_df:pd.DataFrame, window_seconds:int=15*60, step_seconds:int=.5*60, threshold_seconds:int=30*60, min_valid_count:int=20) -> pd.DataFrame:
     # Make a copy of the dataframe to avoid changing the original
     df = input_df.copy()
 

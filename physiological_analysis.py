@@ -420,6 +420,7 @@ def calculate_bbi_continuous_change(username: str, intervention_name: str, minut
     """
     Calculate continuous BBI changes for a specified time after an intervention.
     Returns a DataFrame with continuous timestamps and corresponding BBI changes.
+    Uses a rolling baseline approach where each point is compared to the previous 5-minute window.
     """
     with get_rds_connection() as conn:
         with conn.cursor() as cursor:
@@ -464,71 +465,88 @@ def calculate_bbi_continuous_change(username: str, intervention_name: str, minut
                 if isinstance(end_time, str):
                     end_time = float(end_time)
                 
-                # Get baseline (pre-intervention) BBI
-                pre_start = start_time - (5 * 60 * 1000)  # 5 minutes before intervention
-                pre_end = start_time
-                
-                cursor.execute(f"""
-                    SELECT AVG(bbi) as avg_bbi
-                    FROM {username}_bbi
-                    WHERE unix_timestamp_cleaned BETWEEN %s AND %s
-                """, (pre_start, pre_end))
-                pre_bbi = cursor.fetchone()[0]
-                
-                if pre_bbi is None or pre_bbi == 0:
-                    print(f"Warning: No valid pre-intervention BBI for {intervention_name} (ID: {intervention_id})")
-                    continue
-                
-                # Convert pre_bbi to float if it's a string
-                if isinstance(pre_bbi, str):
-                    pre_bbi = float(pre_bbi)
-                
-                # Get continuous BBI data for minutes_range after intervention
-                post_end_time = end_time + (minutes_range * 60 * 1000)
+                # Get continuous BBI data from well before the intervention to the end of our analysis window
+                # We need to get data from before the intervention to calculate rolling baselines
+                pre_start = start_time - (15 * 60 * 1000)  # 15 minutes before intervention start to have enough context
+                post_end_time = end_time + (minutes_range * 60 * 1000)  # Our full analysis window after intervention
                 
                 cursor.execute(f"""
                     SELECT unix_timestamp_cleaned, bbi
                     FROM {username}_bbi
                     WHERE unix_timestamp_cleaned BETWEEN %s AND %s
                     ORDER BY unix_timestamp_cleaned
-                """, (end_time, post_end_time))
+                """, (pre_start, post_end_time))
                 
                 continuous_data = cursor.fetchall()
                 
                 if not continuous_data:
-                    print(f"Warning: No post-intervention BBI data found for {intervention_name} (ID: {intervention_id})")
+                    print(f"Warning: No BBI data found for {intervention_name} (ID: {intervention_id})")
                     continue
                 
-                # Process the continuous data
-                for timestamp, bbi in continuous_data:
-                    # Convert timestamp to numeric if it's a string
-                    if isinstance(timestamp, str):
-                        timestamp = float(timestamp)
+                # Convert to DataFrame for easier processing
+                df = pd.DataFrame(continuous_data, columns=['unix_timestamp', 'bbi'])
+                
+                # Ensure numeric data types
+                df['unix_timestamp'] = pd.to_numeric(df['unix_timestamp'])
+                df['bbi'] = pd.to_numeric(df['bbi'])
+                
+                # Calculate minutes relative to intervention end
+                df['minutes_rel_end'] = (df['unix_timestamp'] - end_time) / (60 * 1000)
+                
+                # Filter to only post-intervention data for results
+                post_df = df[df['unix_timestamp'] >= end_time].copy()
+                
+                if post_df.empty:
+                    print(f"Warning: No post-intervention BBI data for {intervention_name} (ID: {intervention_id})")
+                    continue
+                
+                # For each post-intervention point, calculate a rolling baseline
+                for idx, row in post_df.iterrows():
+                    current_time = row['unix_timestamp']
+                    rolling_baseline_start = current_time - (5 * 60 * 1000)  # 5 minutes before current point
                     
-                    # Calculate minutes after intervention end
-                    minutes_after = (timestamp - end_time) / (60 * 1000)
+                    # Get the rolling baseline window data
+                    baseline_data = df[(df['unix_timestamp'] >= rolling_baseline_start) & 
+                                      (df['unix_timestamp'] < current_time)]
                     
-                    # Calculate percentage change from baseline
-                    if bbi is not None:
-                        # Convert bbi to float if it's a string
-                        if isinstance(bbi, str):
-                            bbi = float(bbi)
+                    if not baseline_data.empty:
+                        rolling_baseline_avg = baseline_data['bbi'].mean()
                         
-                        percent_change = ((bbi - pre_bbi) / pre_bbi) * 100
+                        # Calculate absolute change from rolling baseline
+                        absolute_change = row['bbi'] - rolling_baseline_avg
+                        
                         all_results.append({
-                            'unix_timestamp': timestamp,
-                            'minutes_after': minutes_after,
-                            'bbi_change': percent_change,
+                            'unix_timestamp': current_time,
+                            'minutes_after': row['minutes_rel_end'],
+                            'bbi_change': absolute_change,  # Absolute change in ms
                             'intervention': intervention_name,
                             'intervention_id': intervention_id
                         })
             
-            return pd.DataFrame(all_results)
+            result_df = pd.DataFrame(all_results)
+            
+            # Apply smoothing to the resulting data if needed
+            if not result_df.empty:
+                # Sort by minutes_after to ensure proper smoothing
+                result_df = result_df.sort_values('minutes_after')
+                
+                # Apply a rolling window smoothing to reduce noise
+                for (intervention, intervention_id), group_df in result_df.groupby(['intervention', 'intervention_id']):
+                    mask = ((result_df['intervention'] == intervention) & 
+                           (result_df['intervention_id'] == intervention_id))
+                    
+                    # Apply smoothing with a 5-point window
+                    result_df.loc[mask, 'bbi_change'] = group_df['bbi_change'].rolling(
+                        window=5, center=True, min_periods=1
+                    ).mean()
+            
+            return result_df
 
 def calculate_hrv_continuous_change(username: str, intervention_name: str, minutes_range=60) -> pd.DataFrame:
     """
     Calculate continuous HRV changes for a specified time after an intervention.
     Returns a DataFrame with continuous timestamps and corresponding HRV changes.
+    Uses a rolling baseline approach where each point is compared to the previous 5-minute window.
     """
     with get_rds_connection() as conn:
         with conn.cursor() as cursor:
@@ -573,66 +591,82 @@ def calculate_hrv_continuous_change(username: str, intervention_name: str, minut
                 if isinstance(end_time, str):
                     end_time = float(end_time)
                 
-                # Get baseline (pre-intervention) RMSSD
-                pre_start = start_time - (5 * 60 * 1000)  # 5 minutes before intervention
-                pre_end = start_time
-                
-                cursor.execute(f"""
-                    SELECT AVG(rmssd) as avg_rmssd
-                    FROM {username}_rmssd
-                    WHERE unix_timestamp_cleaned BETWEEN %s AND %s
-                """, (pre_start, pre_end))
-                pre_rmssd = cursor.fetchone()[0]
-                
-                if pre_rmssd is None or pre_rmssd == 0:
-                    print(f"Warning: No valid pre-intervention RMSSD for {intervention_name} (ID: {intervention_id})")
-                    continue
-                
-                # Convert pre_rmssd to float if it's a string
-                if isinstance(pre_rmssd, str):
-                    pre_rmssd = float(pre_rmssd)
-                
-                # Get continuous RMSSD data for minutes_range after intervention
-                post_end_time = end_time + (minutes_range * 60 * 1000)
+                # Get continuous RMSSD data from well before the intervention to the end of our analysis window
+                # We need to get data from before the intervention to calculate rolling baselines
+                pre_start = start_time - (15 * 60 * 1000)  # 15 minutes before intervention start to have enough context
+                post_end_time = end_time + (minutes_range * 60 * 1000)  # Our full analysis window after intervention
                 
                 cursor.execute(f"""
                     SELECT unix_timestamp_cleaned, rmssd
                     FROM {username}_rmssd
                     WHERE unix_timestamp_cleaned BETWEEN %s AND %s
                     ORDER BY unix_timestamp_cleaned
-                """, (end_time, post_end_time))
+                """, (pre_start, post_end_time))
                 
                 continuous_data = cursor.fetchall()
                 
                 if not continuous_data:
-                    print(f"Warning: No post-intervention RMSSD data found for {intervention_name} (ID: {intervention_id})")
+                    print(f"Warning: No RMSSD data found for {intervention_name} (ID: {intervention_id})")
                     continue
                 
-                # Process the continuous data
-                for timestamp, rmssd in continuous_data:
-                    # Convert timestamp to numeric if it's a string
-                    if isinstance(timestamp, str):
-                        timestamp = float(timestamp)
+                # Convert to DataFrame for easier processing
+                df = pd.DataFrame(continuous_data, columns=['unix_timestamp', 'rmssd'])
+                
+                # Ensure numeric data types
+                df['unix_timestamp'] = pd.to_numeric(df['unix_timestamp'])
+                df['rmssd'] = pd.to_numeric(df['rmssd'])
+                
+                # Calculate minutes relative to intervention end
+                df['minutes_rel_end'] = (df['unix_timestamp'] - end_time) / (60 * 1000)
+                
+                # Filter to only post-intervention data for results
+                post_df = df[df['unix_timestamp'] >= end_time].copy()
+                
+                if post_df.empty:
+                    print(f"Warning: No post-intervention RMSSD data for {intervention_name} (ID: {intervention_id})")
+                    continue
+                
+                # For each post-intervention point, calculate a rolling baseline
+                for idx, row in post_df.iterrows():
+                    current_time = row['unix_timestamp']
+                    rolling_baseline_start = current_time - (5 * 60 * 1000)  # 5 minutes before current point
                     
-                    # Calculate minutes after intervention end
-                    minutes_after = (timestamp - end_time) / (60 * 1000)
+                    # Get the rolling baseline window data
+                    baseline_data = df[(df['unix_timestamp'] >= rolling_baseline_start) & 
+                                      (df['unix_timestamp'] < current_time)]
                     
-                    # Calculate percentage change from baseline
-                    if rmssd is not None:
-                        # Convert rmssd to float if it's a string
-                        if isinstance(rmssd, str):
-                            rmssd = float(rmssd)
-                            
-                        percent_change = ((rmssd - pre_rmssd) / pre_rmssd) * 100
+                    if not baseline_data.empty:
+                        rolling_baseline_avg = baseline_data['rmssd'].mean()
+                        
+                        # Calculate absolute change from rolling baseline
+                        absolute_change = row['rmssd'] - rolling_baseline_avg
+                        
                         all_results.append({
-                            'unix_timestamp': timestamp,
-                            'minutes_after': minutes_after,
-                            'rmssd_change': percent_change,
+                            'unix_timestamp': current_time,
+                            'minutes_after': row['minutes_rel_end'],
+                            'rmssd_change': absolute_change,  # Absolute change in ms
                             'intervention': intervention_name,
                             'intervention_id': intervention_id
                         })
             
-            return pd.DataFrame(all_results)
+            result_df = pd.DataFrame(all_results)
+            
+            # Apply smoothing to the resulting data if needed
+            if not result_df.empty:
+                # Sort by minutes_after to ensure proper smoothing
+                result_df = result_df.sort_values('minutes_after')
+                
+                # Apply a rolling window smoothing to reduce noise
+                for (intervention, intervention_id), group_df in result_df.groupby(['intervention', 'intervention_id']):
+                    mask = ((result_df['intervention'] == intervention) & 
+                           (result_df['intervention_id'] == intervention_id))
+                    
+                    # Apply smoothing with a 5-point window
+                    result_df.loc[mask, 'rmssd_change'] = group_df['rmssd_change'].rolling(
+                        window=5, center=True, min_periods=1
+                    ).mean()
+            
+            return result_df
 
 def visualize_analysis(results_df: pd.DataFrame, username: str):
     if results_df.empty:
@@ -698,6 +732,57 @@ def visualize_analysis(results_df: pd.DataFrame, username: str):
     ax3.grid(axis="y", alpha=0.3)
     plt.tight_layout()
     st.pyplot(fig5)
+    
+    # Sentiment Analysis Section
+    st.write("### Sentiment Analysis: Reported Impact vs. Physiological Response")
+
+    # Add explanation about sentiment analysis
+    st.info("""
+    This analysis shows the percentage of events/interventions that resulted in improved HRV for each reported impact category.
+    - Higher percentages indicate that a greater proportion of events/interventions with that reported impact resulted in improved heart rate variability.
+    - Improved HRV typically indicates better stress recovery and relaxation.
+    """)
+
+    # Ensure we have sentiment data
+    if 'reported_impact' in plot_df.columns:
+        # Filter out entries with "Unknown" reported impact
+        filtered_plot_df = plot_df[plot_df['reported_impact'] != 'Unknown']
+        
+        if filtered_plot_df.empty:
+            st.warning("No data with known impact feedback available for visualization. Please provide impact feedback in your annotations.")
+        else:
+            # Create a column indicating positive HRV change (improved HRV)
+            filtered_plot_df['improved_hrv'] = filtered_plot_df['rmssd_change'] > 0
+            
+            # Group by reported impact and calculate percentage with improved HRV
+            improved_hrv_pct = filtered_plot_df.groupby('reported_impact')['improved_hrv'].mean() * 100
+            improved_hrv_pct = improved_hrv_pct.reset_index()
+            improved_hrv_pct.columns = ['reported_impact', 'percent_improved']
+            
+            # Create figure for the chart
+            fig_impact, ax = plt.subplots(figsize=(10, 6))
+            
+            # Plot reported impact vs percentage with improved HRV
+            bars = ax.bar(improved_hrv_pct['reported_impact'], improved_hrv_pct['percent_improved'])
+            ax.set_title('Percentage of Events/Interventions with Improved HRV by Reported Impact', fontsize=16)
+            ax.set_xlabel('Reported Impact', fontsize=14)
+            ax.set_ylabel('Percentage with Improved HRV (%)', fontsize=14)
+            ax.set_ylim(0, 100)  # Set y-axis to range from 0 to 100%
+            
+            # Add percentage labels on top of bars
+            for bar in bars:
+                height = bar.get_height()
+                ax.text(bar.get_x() + bar.get_width()/2., height + 1,
+                        f'{height:.1f}%', ha='center', va='bottom')
+            
+            # Color bars
+            for i, bar in enumerate(bars):
+                bar.set_color('#77dd77')  # Green for all bars
+            
+            plt.tight_layout()
+            st.pyplot(fig_impact)
+    else:
+        st.warning("Reported impact data is not available. Make sure to include impact feedback in your annotations.")
     
     # ----- Additional Temporal Patterns: Heatmap for Standardized Stress Reduction Magnitude -----
     # Compute global mean and std for stress_change from results_df
@@ -1284,7 +1369,23 @@ def display_category_impact_table(results_df: pd.DataFrame):
         frequency = len(category_df)
         frequency_pct = (frequency / len(df)) * 100
         
-        # Determine the appropriate HRV metric based on available columns
+        # Get HRV time data from session state if available
+        calculate_different_windows = False
+        hrv_time_data = pd.DataFrame()
+        
+        if 'hrv_time_data' in st.session_state and st.session_state.hrv_time_data is not None:
+            hrv_time_data = st.session_state.hrv_time_data
+            
+            # If we have time data and events from this category are included,
+            # we'll calculate impacts for different time windows
+            if not hrv_time_data.empty:
+                event_names = category_df['name'].unique()
+                relevant_hrv_data = hrv_time_data[hrv_time_data['event_name'].isin(event_names)]
+                
+                if not relevant_hrv_data.empty:
+                    calculate_different_windows = True
+        
+        # Calculate base impact using the existing metrics in results_df
         if 'rmssd_change' in category_df.columns:
             avg_impact = category_df['rmssd_change'].mean()
         elif 'rmssd_pct_change' in category_df.columns:
@@ -1299,12 +1400,44 @@ def display_category_impact_table(results_df: pd.DataFrame):
                 avg_impact = None
         else:
             avg_impact = None
-        
-        # For demonstration purpose, we'll use the same value for 15, 30, and 60 minute intervals
-        # In a real application, you would calculate these separately or use values from continuous data
+            
+        # Default: use base impact for all time windows
         avg_impact_15 = avg_impact
         avg_impact_30 = avg_impact
         avg_impact_60 = avg_impact
+        
+        # If we have continuous time data, calculate different impacts for each window
+        if calculate_different_windows:
+            # For each event in this category, get the HRV changes at the time points
+            event_names = category_df['name'].unique()
+            
+            # Filter HRV time data for events in this category
+            category_hrv_data = hrv_time_data[hrv_time_data['event_name'].isin(event_names)]
+            
+            # Calculate impacts at different time windows
+            if not category_hrv_data.empty:
+                # 15-minute window
+                window_15 = category_hrv_data[(category_hrv_data['minutes_after'] >= 0) & 
+                                           (category_hrv_data['minutes_after'] <= 15)]
+                if not window_15.empty:
+                    avg_impact_15 = window_15['rmssd_change'].mean()
+                
+                # 30-minute window
+                window_30 = category_hrv_data[(category_hrv_data['minutes_after'] >= 0) & 
+                                           (category_hrv_data['minutes_after'] <= 30)]
+                if not window_30.empty:
+                    avg_impact_30 = window_30['rmssd_change'].mean()
+                
+                # 60-minute window
+                window_60 = category_hrv_data[(category_hrv_data['minutes_after'] >= 0) & 
+                                           (category_hrv_data['minutes_after'] <= 60)]
+                if not window_60.empty:
+                    avg_impact_60 = window_60['rmssd_change'].mean()
+                
+                # Convert from decimal to percentage (for display consistency)
+                avg_impact_15 = avg_impact_15 * 100 if avg_impact_15 is not None else None
+                avg_impact_30 = avg_impact_30 * 100 if avg_impact_30 is not None else None
+                avg_impact_60 = avg_impact_60 * 100 if avg_impact_60 is not None else None
         
         category_stats.append({
             'Intervention Category': category,
@@ -1318,7 +1451,7 @@ def display_category_impact_table(results_df: pd.DataFrame):
     stats_df = pd.DataFrame(category_stats)
     
     # Display the table
-    st.write("### Summary of Event/Intervention Categories Impact")
+    st.write("### Summary of Event/Intervention Categories Impact on HRV")
     st.write("This table shows how different categories of events/interventions affect HRV over time.")
     st.table(stats_df)
     
