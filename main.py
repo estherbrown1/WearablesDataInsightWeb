@@ -1,4 +1,13 @@
 import streamlit as st
+
+# # Set page configuration to use wide mode
+# st.set_page_config(
+#     page_title="Wearables Tool",
+#     page_icon="📊",
+#     layout="wide",
+#     initial_sidebar_state="expanded"
+# )
+
 from signup_page import signup_page
 from login_page import login_page
 from visualization_page import visualization_page

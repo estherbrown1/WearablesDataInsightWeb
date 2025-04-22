@@ -471,8 +471,27 @@ class ComparisonPlotsManager:
                                 x_axis:alt.X, y_scale:alt.Scale) -> tuple[alt.Chart, alt.Chart]:
         """
         Creates and returns Altair chart layers for lines representing trajectories of instances.
+        Uses a rolling window approach to smooth the data and prevent spikes.
         """
-        data = df_to_altair(df)
+        # Make a copy to avoid modifying the original dataframe
+        smoothed_df = df.copy()
+        
+        # Sort the data by time for proper rolling calculations
+        for instance in smoothed_df['instance_label'].unique():
+            # Apply smoothing to each instance separately
+            instance_data = smoothed_df[smoothed_df['instance_label'] == instance].copy()
+            if len(instance_data) > 5:  # Only smooth if we have enough data points
+                # Sort by minutes
+                instance_data = instance_data.sort_values('mins')
+                # Apply a rolling average with a 5-point window
+                instance_data[self.var] = instance_data[self.var].rolling(
+                    window=5, min_periods=1, center=True
+                ).mean()
+                # Update the original dataframe with smoothed values
+                smoothed_df.loc[smoothed_df['instance_label'] == instance, self.var] = instance_data[self.var].values
+        
+        # Use the smoothed dataframe for plotting
+        data = df_to_altair(smoothed_df)
 
         lines_before_after = alt.Chart(data).mark_line(
             opacity=0.85
