@@ -2,8 +2,8 @@ pandas
 numpy
 google-cloud-storage
 google
-streamlit
-altair
+streamlit>=1.30
+altair>=5,<6
 vega_datasets
 pymysql
 pwlf
