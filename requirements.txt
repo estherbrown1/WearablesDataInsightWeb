@@ -1,4 +1,5 @@
-pandas<2.1
+pandas>=2.1
+setuptools
 numpy
 google-cloud-storage
 google
