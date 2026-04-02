@@ -299,9 +299,16 @@ def save_data(df_dict, user_name):
 
     # Format DataFrames for SQL and prepare for insertion
     for k in df_dict:
-        df_dict[k]["name"] = user_name
-        df_dict[k] = df_dict[k].applymap(lambda x: x.strftime('%Y-%m-%d %H:%M:%S') if isinstance(x, pd.Timestamp) else x)
-        df_dict[k] = df_dict[k].replace({pd.NA: None, np.nan: None})  # Replace NaN with None for MySQL compatibility
+        df = df_dict[k].copy()
+        df["name"] = user_name
+
+        for col in df.columns:
+            if pd.api.types.is_datetime64_any_dtype(df[col]):
+                df[col] = df[col].dt.strftime('%Y-%m-%d %H:%M:%S')
+
+        df = df.replace({pd.NA: None, np.nan: None})
+
+        df_dict[k] = df
 
     for df_name, df in df_dict.items():
         # Generate the table creation SQL with columns matching the DataFrame structure
@@ -316,7 +323,7 @@ def save_data(df_dict, user_name):
         columns = ', '.join(df.columns)
         placeholders = ', '.join(['%s'] * len(df.columns))
         insert_sql = f"INSERT IGNORE INTO {user_name}_{df_name} ({columns}) VALUES ({placeholders})"
-        
+
         # Convert DataFrame to list of tuples and execute bulk insert
         data_to_insert = [tuple(row) for row in df.itertuples(index=False, name=None)]
         cursor.executemany(insert_sql, data_to_insert)
