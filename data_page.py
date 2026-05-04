@@ -276,7 +276,7 @@ def save_data(df_dict, user_name):
 
     for k in df_dict:
         df_dict[k]["name"] = user_name
-        df_dict[k] = df_dict[k].applymap(
+        df_dict[k] = df_dict[k].map(
             lambda x: x.strftime('%Y-%m-%d %H:%M:%S') if isinstance(x, pd.Timestamp) else x
         )
         df_dict[k] = df_dict[k].replace({pd.NA: None, np.nan: None})
